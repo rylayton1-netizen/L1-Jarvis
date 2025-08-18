@@ -46,7 +46,7 @@ def index():
 def query_ai():
     query = request.form['query']
     context = search_db(query)
-    prompt = f"Based on this information: {context}\n\nAnswer the question for a phone support agent handling inquiries about Jase Medical emergency medications: {query}\nSuggest a professional script to say on the phone."
+    prompt = f"Based on this information: {context}\n\nAnswer the question for a phone support agent handling inquiries about Jase Medical emergency medications: {query}\nThen, provide a professional script to say on the phone, prefixed with 'Script:'."
     
     response = client.chat.completions.create(
         model="gpt-3.5-turbo",
