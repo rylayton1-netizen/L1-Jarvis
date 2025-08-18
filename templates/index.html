@@ -1,0 +1,32 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <title>Jase Medical AI Agent Assistant</title>
+    <style>
+        body { font-family: Arial, sans-serif; margin: 20px; }
+        form { margin-bottom: 20px; }
+        #response { white-space: pre-wrap; }
+    </style>
+    <script>
+        function askQuery() {
+            let formData = new FormData(document.getElementById('queryForm'));
+            fetch('/query', { method: 'POST', body: formData })
+                .then(res => res.json())
+                .then(data => document.getElementById('response').innerText = data.answer);
+        }
+    </script>
+</head>
+<body>
+    <h1>Jase Medical AI Agent Assistant for L1 Phones</h1>
+    
+    <h2>Ask a Question</h2>
+    <form id="queryForm">
+        <input type="text" name="query" placeholder="e.g., What's in the Jase Case?">
+        <button type="button" onclick="askQuery()">Ask</button>
+    </form>
+    
+    <h2>Response</h2>
+    <div id="response"></div>
+</body>
+</html>
