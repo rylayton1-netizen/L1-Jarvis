@@ -14,9 +14,15 @@ from PyPDF2 import PdfReader
 
 load_dotenv()
 openai_api_key = os.getenv('OPENAI_API_KEY')
+if not openai_api_key:
+    raise ValueError("OPENAI_API_KEY not set in .env")
 client = OpenAI(api_key=openai_api_key)
 secret_key = os.getenv('SECRET_KEY')
+if not secret_key:
+    raise ValueError("SECRET_KEY not set in .env")
 database_url = os.getenv('DATABASE_URL')
+if not database_url:
+    raise ValueError("DATABASE_URL not set in .env")
 
 app = Flask(__name__)
 app.config['SECRET_KEY'] = secret_key
@@ -27,20 +33,18 @@ db = SQLAlchemy(app)
 login_manager = LoginManager(app)
 login_manager.login_view = 'login'
 
-# Models
 class User(db.Model, UserMixin):
     __tablename__ = 'users'
     id = db.Column(db.Integer, primary_key=True)
     username = db.Column(db.String(80), unique=True, nullable=False)
-    password = db.Column(db.String(120), nullable=False)  # Hash in production
+    password = db.Column(db.String(120), nullable=False)
 
 class Company(db.Model):
     __tablename__ = 'companies'
     id = db.Column(db.Integer, primary_key=True)
     name = db.Column(db.String(80), unique=True, nullable=False)
-    schema_name = db.Column(db.String(120), unique=True, nullable=False)  # e.g., 'company1'
+    schema_name = db.Column(db.String(120), unique=True, nullable=False)
 
-# Forms
 class LoginForm(FlaskForm):
     username = StringField('Username', validators=[DataRequired()])
     password = PasswordField('Password', validators=[DataRequired()])
@@ -56,25 +60,25 @@ class UploadForm(FlaskForm):
     url = StringField('Crawl URL')
     submit = SubmitField('Submit')
 
-# User Loader
 @login_manager.user_loader
 def load_user(user_id):
     return User.query.get(int(user_id))
 
-# Helper to execute queries in company schema
-def execute_in_schema(schema_name, query):
+def execute_in_schema(schema_name, query, params=None):
     with db.engine.connect() as conn:
         conn.execute(f"SET search_path TO {schema_name}")
-        conn.execute(query)
+        if params:
+            conn.execute(query, params)
+        else:
+            conn.execute(query)
         conn.commit()
 
-# Routes
 @app.route('/login', methods=['GET', 'POST'])
 def login():
     form = LoginForm()
     if form.validate_on_submit():
         user = User.query.filter_by(username=form.username.data).first()
-        if user and user.password == form.password.data:  # Hash in production
+        if user and user.password == form.password.data:
             login_user(user)
             return redirect(url_for('dashboard'))
         flash('Invalid credentials')
@@ -95,7 +99,6 @@ def dashboard():
         new_company = Company(name=form.name.data, schema_name=schema_name)
         db.session.add(new_company)
         db.session.commit()
-        # Create schema and knowledge table
         with db.engine.connect() as conn:
             conn.execute(f"CREATE SCHEMA IF NOT EXISTS {schema_name}")
             conn.execute(f"""
@@ -104,7 +107,6 @@ def dashboard():
                     content TEXT
                 )
             """)
-            # Initialize with Jase Medical data for demo
             initial_data = [
                 "The Jase Case costs $289.95 and includes 10 medications: 5 life-saving antibiotics and 5 symptom relief meds, treating over 50 infections. It offers 28 add-on medication options and a KidCase for ages 2-11.",
                 "Jase Daily provides an extended supply of prescription medications for conditions like diabetes, heart health, cholesterol, blood pressure, mental health, and family planning.",
@@ -180,7 +182,7 @@ def add_headers(response):
 with app.app_context():
     db.create_all()
     if not User.query.first():
-        admin = User(username='admin', password='password')  # Change in production
+        admin = User(username='admin', password='password')
         db.session.add(admin)
         db.session.commit()
 

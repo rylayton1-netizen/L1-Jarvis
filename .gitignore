@@ -2,3 +2,4 @@
 database.db
 __pycache__/
 *.pyc
+multi_agent.db
