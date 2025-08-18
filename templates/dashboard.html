@@ -1,0 +1,22 @@
+<!DOCTYPE html>
+<html>
+<head>
+    <title>Dashboard</title>
+</head>
+<body>
+    <h1>Admin Dashboard</h1>
+    <a href="{{ url_for('logout') }}">Logout</a>
+    <h2>Create Company</h2>
+    <form method="POST">
+        {{ form.hidden_tag() }}
+        {{ form.name.label }} {{ form.name() }}
+        {{ form.submit() }}
+    </form>
+    <h2>Companies</h2>
+    <ul>
+        {% for company in companies %}
+            <li><a href="{{ url_for('manage', company_id=company.id) }}">{{ company.name }}</a></li>
+        {% endfor %}
+    </ul>
+</body>
+</html>
