@@ -16,7 +16,6 @@ load_dotenv()
 openai_api_key = os.getenv('OPENAI_API_KEY')
 if not openai_api_key:
     raise ValueError("OPENAI_API_KEY not set in .env")
-client = OpenAI(api_key=openai_api_key)
 secret_key = os.getenv('SECRET_KEY')
 if not secret_key:
     raise ValueError("SECRET_KEY not set in .env")
@@ -65,8 +64,10 @@ def load_user(user_id):
     return User.query.get(int(user_id))
 
 def execute_in_schema(schema_name, query, params=None):
+    is_sqlite = database_url.startswith('sqlite')
     with db.engine.connect() as conn:
-        conn.execute(f"SET search_path TO {schema_name}")
+        if not is_sqlite:
+            conn.execute(f"SET search_path TO {schema_name}")
         if params:
             conn.execute(query, params)
         else:
@@ -78,7 +79,7 @@ def login():
     form = LoginForm()
     if form.validate_on_submit():
         user = User.query.filter_by(username=form.username.data).first()
-        if user and user.password == form.password.data:
+        if user and user.password == form.password.data:  # Hash in production
             login_user(user)
             return redirect(url_for('dashboard'))
         flash('Invalid credentials')
@@ -99,25 +100,16 @@ def dashboard():
         new_company = Company(name=form.name.data, schema_name=schema_name)
         db.session.add(new_company)
         db.session.commit()
+        is_sqlite = database_url.startswith('sqlite')
         with db.engine.connect() as conn:
-            conn.execute(f"CREATE SCHEMA IF NOT EXISTS {schema_name}")
+            if not is_sqlite:
+                conn.execute(f"CREATE SCHEMA IF NOT EXISTS {schema_name}")
             conn.execute(f"""
-                CREATE TABLE IF NOT EXISTS {schema_name}.knowledge (
+                CREATE TABLE IF NOT EXISTS {schema_name if not is_sqlite else 'public'}.knowledge (
                     id SERIAL PRIMARY KEY,
                     content TEXT
                 )
             """)
-            initial_data = [
-                "The Jase Case costs $289.95 and includes 10 medications: 5 life-saving antibiotics and 5 symptom relief meds, treating over 50 infections. It offers 28 add-on medication options and a KidCase for ages 2-11.",
-                "Jase Daily provides an extended supply of prescription medications for conditions like diabetes, heart health, cholesterol, blood pressure, mental health, and family planning.",
-                "Jase Go is a $129.95 travel-sized emergency med kit covering over 30 common travel conditions like traveler’s diarrhea, STIs, motion sickness, UTIs, and pneumonia.",
-                "UseCase UTI costs $99.95 and is used to relieve urinary pain, treat lower urinary tract infections, vaginal candidiasis, and jock itch. It includes UTI test strips.",
-                "UseCase Parasites starts at $199.95, with compounded Ivermectin and Mebendazole to treat parasitic infections inside and outside the body.",
-                "Orders are reviewed by expert physicians, and medications are shipped directly from a licensed pharmacy. Contact support at answers@jase.com or (888) 522-6912.",
-                "Jase Medical does not accept insurance but accepts HSA cards in some cases. Medications should be used within expiration dates and only when medical help is unavailable."
-            ]
-            for content in initial_data:
-                conn.execute(f"INSERT INTO {schema_name}.knowledge (content) VALUES (%s)", (content,))
             conn.commit()
         flash('Company created')
     companies = Company.query.all()
@@ -131,8 +123,11 @@ def manage(company_id):
     form.company_id.choices = [(c.id, c.name) for c in Company.query.all()]
     form.company_id.data = company_id
     if form.validate_on_submit():
+        is_sqlite = database_url.startswith('sqlite')
         with db.engine.connect() as conn:
-            conn.execute(f"SET search_path TO {company.schema_name}")
+            if not is_sqlite:
+                conn.execute(f"SET search_path TO {company.schema_name}")
+            schema = company.schema_name if not is_sqlite else 'public'
             if form.file.data:
                 file = form.file.data
                 if file.filename.endswith('.csv'):
@@ -141,12 +136,12 @@ def manage(company_id):
                 elif file.filename.endswith('.pdf'):
                     reader = PdfReader(file)
                     content = ''.join(page.extract_text() + '\n' for page in reader.pages)
-                conn.execute(f"INSERT INTO knowledge (content) VALUES (%s)", (content,))
+                conn.execute(f"INSERT INTO {schema}.knowledge (content) VALUES (%s)", (content,))
             if form.url.data:
                 response = requests.get(form.url.data)
                 soup = BeautifulSoup(response.text, 'html.parser')
                 content = soup.get_text()
-                conn.execute(f"INSERT INTO knowledge (content) VALUES (%s)", (content,))
+                conn.execute(f"INSERT INTO {schema}.knowledge (content) VALUES (%s)", (content,))
             conn.commit()
         flash('Data added')
     return render_template('manage.html', form=form, company=company)
@@ -160,9 +155,12 @@ def agent(company_name):
 def query(company_name):
     company = Company.query.filter_by(name=company_name).first_or_404()
     query = request.form['query']
+    is_sqlite = database_url.startswith('sqlite')
     with db.engine.connect() as conn:
-        conn.execute(f"SET search_path TO {company.schema_name}")
-        result = conn.execute("SELECT content FROM knowledge WHERE content LIKE %s", ('%' + query + '%',))
+        if not is_sqlite:
+            conn.execute(f"SET search_path TO {company.schema_name}")
+        schema = company.schema_name if not is_sqlite else 'public'
+        result = conn.execute(f"SELECT content FROM {schema}.knowledge WHERE content LIKE %s", ('%' + query + '%',))
         results = result.fetchall()
         context = ' '.join([row[0] for row in results])
     prompt = f"Based on this information: {context}\n\nCurrent date: August 18, 2025. Answer the question for a phone support agent handling inquiries about {company_name} emergency medications: {query}\nThen, provide a professional script to say on the phone, prefixed with 'Script:'."
