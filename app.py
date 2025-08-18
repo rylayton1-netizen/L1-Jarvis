@@ -23,6 +23,11 @@ database_url = os.getenv('DATABASE_URL')
 if not database_url:
     raise ValueError("DATABASE_URL not set in .env")
 
+try:
+    client = OpenAI(api_key=openai_api_key)
+except Exception as e:
+    raise ValueError(f"Failed to initialize OpenAI client: {str(e)}")
+
 app = Flask(__name__)
 app.config['SECRET_KEY'] = secret_key
 app.config['SQLALCHEMY_DATABASE_URI'] = database_url
@@ -79,7 +84,7 @@ def login():
     form = LoginForm()
     if form.validate_on_submit():
         user = User.query.filter_by(username=form.username.data).first()
-        if user and user.password == form.password.data:  # Hash in production
+        if user and user.password == form.password.data:
             login_user(user)
             return redirect(url_for('dashboard'))
         flash('Invalid credentials')
