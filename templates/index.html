@@ -2,31 +2,176 @@
 <html lang="en">
 <head>
     <meta charset="UTF-8">
-    <title>Jase Medical AI Agent Assistant</title>
+    <title>Jase Medical Assistant</title>
     <style>
-        body { font-family: Arial, sans-serif; margin: 20px; }
-        form { margin-bottom: 20px; }
-        #response { white-space: pre-wrap; }
+        body {
+            font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+            background-color: #1a1a1a;
+            color: #ffffff;
+            margin: 0;
+            padding: 20px;
+            display: flex;
+            flex-direction: column;
+            align-items: center;
+            min-height: 100vh;
+        }
+        h1 {
+            font-size: 2.5em;
+            margin-bottom: 20px;
+            text-align: center;
+        }
+        .container {
+            max-width: 800px;
+            width: 100%;
+        }
+        .category {
+            background-color: #2c2c2c;
+            border-radius: 8px;
+            margin-bottom: 10px;
+            padding: 15px;
+            cursor: pointer;
+        }
+        .category-header {
+            font-size: 1.2em;
+            font-weight: bold;
+        }
+        .subcategories {
+            display: none;
+            margin-top: 10px;
+        }
+        .subcategories.active {
+            display: block;
+        }
+        .subcategory {
+            background-color: #3a3a3a;
+            border-radius: 5px;
+            padding: 10px;
+            margin: 5px 0;
+            cursor: pointer;
+            transition: background-color 0.2s;
+        }
+        .subcategory:hover {
+            background-color: #4a4a4a;
+        }
+        .query-form {
+            margin: 20px 0;
+            display: flex;
+            gap: 10px;
+        }
+        input[type="text"] {
+            flex: 1;
+            padding: 10px;
+            border: none;
+            border-radius: 5px;
+            background-color: #3a3a3a;
+            color: #ffffff;
+            font-size: 1em;
+        }
+        button {
+            padding: 10px 20px;
+            border: none;
+            border-radius: 5px;
+            background-color: #007bff;
+            color: #ffffff;
+            font-size: 1em;
+            cursor: pointer;
+            transition: background-color 0.2s;
+        }
+        button:hover {
+            background-color: #0056b3;
+        }
+        #response {
+            white-space: pre-wrap;
+            background-color: #2c2c2c;
+            border-radius: 5px;
+            padding: 15px;
+            min-height: 100px;
+        }
+        .loader {
+            display: none;
+            border: 4px solid #f3f3f3;
+            border-top: 4px solid #007bff;
+            border-radius: 50%;
+            width: 30px;
+            height: 30px;
+            animation: spin 1s linear infinite;
+            margin: 10px auto;
+        }
+        .loader.active {
+            display: block;
+        }
+        @keyframes spin {
+            0% { transform: rotate(0deg); }
+            100% { transform: rotate(360deg); }
+        }
     </style>
     <script>
-        function askQuery() {
-            let formData = new FormData(document.getElementById('queryForm'));
+        function toggleCategory(id) {
+            const subcategories = document.getElementById(id);
+            subcategories.classList.toggle('active');
+        }
+
+        function askQuery(query) {
+            const input = document.getElementById('queryInput');
+            input.value = query;
+            submitQuery();
+        }
+
+        function submitQuery() {
+            const formData = new FormData(document.getElementById('queryForm'));
+            const responseDiv = document.getElementById('response');
+            const loader = document.getElementById('loader');
+            responseDiv.innerText = '';
+            loader.classList.add('active');
+
             fetch('/query', { method: 'POST', body: formData })
                 .then(res => res.json())
-                .then(data => document.getElementById('response').innerText = data.answer);
+                .then(data => {
+                    responseDiv.innerText = data.answer;
+                    loader.classList.remove('active');
+                })
+                .catch(err => {
+                    responseDiv.innerText = 'Error: ' + err.message;
+                    loader.classList.remove('active');
+                });
         }
     </script>
 </head>
 <body>
-    <h1>Jase Medical AI Agent Assistant for L1 Phones</h1>
-    
-    <h2>Ask a Question</h2>
-    <form id="queryForm">
-        <input type="text" name="query" placeholder="e.g., What's in the Jase Case?">
-        <button type="button" onclick="askQuery()">Ask</button>
-    </form>
-    
-    <h2>Response</h2>
-    <div id="response"></div>
+    <h1>Jase Medical Assistant</h1>
+    <div class="container">
+        <div class="category" onclick="toggleCategory('jase-case')">
+            <div class="category-header">Jase Case</div>
+            <div class="subcategories" id="jase-case">
+                <div class="subcategory" onclick="askQuery('What is included in the Jase Case?')">What is included in the Jase Case?</div>
+                <div class="subcategory" onclick="askQuery('How much does the Jase Case cost?')">How much does the Jase Case cost?</div>
+                <div class="subcategory" onclick="askQuery('Is there a Jase Case for children?')">Is there a Jase Case for children?</div>
+            </div>
+        </div>
+        <div class="category" onclick="toggleCategory('jase-pantry')">
+            <div class="category-header">Jase Pantry</div>
+            <div class="subcategories" id="jase-pantry">
+                <div class="subcategory" onclick="askQuery('What is Jase Daily?')">What is Jase Daily?</div>
+                <div class="subcategory" onclick="askQuery('What conditions does Jase Daily cover?')">What conditions does Jase Daily cover?</div>
+                <div class="subcategory" onclick="askQuery('What is UseCase UTI?')">What is UseCase UTI?</div>
+                <div class="subcategory" onclick="askQuery('What is UseCase Parasites?')">What is UseCase Parasites?</div>
+            </div>
+        </div>
+        <div class="category" onclick="toggleCategory('customer-support')">
+            <div class="category-header">Customer Support</div>
+            <div class="subcategories" id="customer-support">
+                <div class="subcategory" onclick="askQuery('How can I contact Jase Medical support?')">How can I contact Jase Medical support?</div>
+                <div class="subcategory" onclick="askQuery('Does Jase Medical accept insurance?')">Does Jase Medical accept insurance?</div>
+                <div class="subcategory" onclick="askQuery('How are Jase Medical orders processed?')">How are Jase Medical orders processed?</div>
+            </div>
+        </div>
+        <form id="queryForm" class="query-form">
+            <input type="text" id="queryInput" name="query" placeholder="e.g., What's in the Jase Case?">
+            <button type="button" onclick="submitQuery()">Ask</button>
+        </form>
+        <div id="loader" class="loader"></div>
+        <h2>Response</h2>
+        <div id="response"></div>
+    </div>
 </body>
 </html>
