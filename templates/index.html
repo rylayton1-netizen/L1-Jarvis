@@ -2,7 +2,7 @@
 <html lang="en">
 <head>
     <meta charset="UTF-8">
-    <title>Jase Medical Assistant</title>
+    <title>{{ company_name | default('Jase Medical') }} Assistant</title>
     <style>
         body {
             font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
@@ -143,7 +143,7 @@
             scriptDiv.innerText = '';
             loader.classList.add('active');
 
-            fetch('/query', { method: 'POST', body: formData })
+            fetch('/query/{{ company_name | default("L1 Phones") }}', { method: 'POST', body: formData })
                 .then(res => res.json())
                 .then(data => {
                     const parts = data.answer.split('Script:');
@@ -159,7 +159,7 @@
     </script>
 </head>
 <body>
-    <h1>Jase Medical Assistant</h1>
+    <h1>{{ company_name | default('Jase Medical') }} Assistant</h1>
     <div class="container">
         <div class="sidebar">
             <div class="category" onclick="toggleCategory('jase-case')">
