@@ -79,6 +79,10 @@ def execute_in_schema(schema_name, query, params=None):
             conn.execute(query)
         conn.commit()
 
+@app.route('/')
+def index():
+    return redirect(url_for('login'))
+
 @app.route('/login', methods=['GET', 'POST'])
 def login():
     form = LoginForm()
@@ -131,7 +135,7 @@ def manage(company_id):
         is_sqlite = database_url.startswith('sqlite')
         with db.engine.connect() as conn:
             if not is_sqlite:
-                conn.execute(f"SET search_path TO {company.schema_name}")
+                conn.execute(f"SET search_path TO {schema_name}")
             schema = company.schema_name if not is_sqlite else 'public'
             if form.file.data:
                 file = form.file.data
@@ -153,8 +157,8 @@ def manage(company_id):
 
 @app.route('/agent/<company_name>')
 def agent(company_name):
-    Company.query.filter_by(name=company_name).first_or_404()
-    return render_template('index.html')
+    company = Company.query.filter_by(name=company_name).first_or_404()
+    return render_template('index.html', company_name=company_name)
 
 @app.route('/query/<company_name>', methods=['POST'])
 def query(company_name):
@@ -179,6 +183,10 @@ def query(company_name):
     except Exception as e:
         return jsonify({'answer': f"Error calling OpenAI: {str(e)}"})
     return jsonify({'answer': answer})
+
+@app.route('/health')
+def health():
+    return jsonify({"status": "healthy"})
 
 @app.after_request
 def add_headers(response):
