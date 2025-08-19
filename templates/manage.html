@@ -1,26 +1,79 @@
-<!doctype html>
-<html>
+<!DOCTYPE html>
+<html lang="en">
 <head>
-  <title>Manage {{ company }}</title>
-  <style>
-    body { font-family: Arial, sans-serif; background: #f5f5f5; text-align: center; padding: 40px; }
-    textarea, input, button { padding: 10px; margin: 10px; width: 50%; border: 1px solid #ccc; border-radius: 5px; }
-    #loader { display: none; }
-  </style>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>{{ company.name }} - Manage</title>
+<link href="https://cdn.jsdelivr.net/npm/tailwindcss@3.3.2/dist/tailwind.min.css" rel="stylesheet">
+<style>
+#loader { display:none; }
+</style>
 </head>
-<body>
-  <h1>Manage Knowledge for {{ company }}</h1>
-  <form method="POST" onsubmit="showLoader()">
-    <textarea name="content" placeholder="Enter text or paste webpage content" required></textarea><br>
-    <button type="submit">Submit</button>
-    <div id="loader">⏳ Submitting...</div>
-  </form>
-  {% if error %}<p style="color:red">{{ error }}</p>{% endif %}
+<body class="bg-gray-100">
+<header class="bg-gray-800 text-white p-4 text-center font-bold">{{ company.name }} - Manage</header>
 
-  <script>
-    function showLoader() {
-      document.getElementById("loader").style.display = "block";
-    }
-  </script>
+<div class="container mx-auto p-4">
+  {% with messages = get_flashed_messages(with_categories=true) %}
+    {% if messages %}
+      {% for category, msg in messages %}
+        <div class="p-2 my-2 rounded {{ 'bg-green-200 text-green-800' if category=='success' else 'bg-red-200 text-red-800' }}">{{ msg }}</div>
+      {% endfor %}
+    {% endif %}
+  {% endwith %}
+
+  <form id="manualForm" action="{{ url_for('add_manual', company_id=company.id) }}" method="POST" class="mb-4">
+    <textarea name="manual_content" placeholder="Add manual knowledge..." class="w-full p-2 border rounded"></textarea>
+    <button type="submit" class="px-4 py-2 bg-blue-600 text-white rounded mt-2">Add Manual</button>
+  </form>
+
+  <form id="urlForm" action="{{ url_for('add_url', company_id=company.id) }}" method="POST" class="mb-4 flex space-x-2">
+    <input type="text" name="url" placeholder="Add URL..." class="flex-1 p-2 border rounded">
+    <button type="submit" class="px-4 py-2 bg-blue-600 text-white rounded">Add URL</button>
+  </form>
+
+  <form id="fileForm" action="{{ url_for('add_file', company_id=company.id) }}" method="POST" enctype="multipart/form-data" class="mb-4 flex space-x-2">
+    <input type="file" name="file" class="p-2 border rounded flex-1">
+    <button type="submit" class="px-4 py-2 bg-blue-600 text-white rounded">Upload File</button>
+  </form>
+
+  <div id="loader" class="text-gray-500">Processing...</div>
+
+  <h2 class="mt-6 font-bold">Knowledge Items</h2>
+  <table class="w-full table-auto bg-white rounded shadow">
+    <thead class="bg-gray-200">
+      <tr>
+        <th class="p-2">Source</th>
+        <th class="p-2">Type</th>
+        <th class="p-2">Actions</th>
+      </tr>
+    </thead>
+    <tbody>
+      {% for k in knowledge %}
+      <tr class="border-t">
+        <td class="p-2">{{ k.source_name }}</td>
+        <td class="p-2">{{ k.source_type }}</td>
+        <td class="p-2 space-x-2">
+          <form action="{{ url_for('delete_knowledge', item_id=k.id) }}" method="POST" class="inline">
+            <button type="submit" class="px-2 py-1 bg-red-600 text-white rounded">Delete</button>
+          </form>
+        </td>
+      </tr>
+      {% endfor %}
+    </tbody>
+  </table>
+</div>
+
+<footer class="bg-gray-800 text-white p-4 text-right">
+  <a href="{{ url_for('dashboard') }}" class="px-3 py-1 bg-gray-600 rounded">Back</a>
+  <a href="{{ url_for('agent', company_id=company.id) }}" class="px-3 py-1 bg-green-600 rounded">Agent Assistant</a>
+</footer>
+
+<script>
+document.querySelectorAll('form').forEach(f=>{
+  f.addEventListener('submit', ()=>{
+    document.getElementById('loader').style.display='block';
+  });
+});
+</script>
 </body>
 </html>
