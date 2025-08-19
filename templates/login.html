@@ -1,97 +1,30 @@
-<!DOCTYPE html>
-<html lang="en">
+<!doctype html>
+<html>
 <head>
-<meta charset="UTF-8">
-<title>L1 AI Assistants - Login</title>
-<style>
-    body {
-        font-family: Arial, sans-serif;
-        background-color: #1a1a1a;
-        color: #ffffff;
-        display: flex;
-        justify-content: center;
-        align-items: center;
-        height: 100vh;
-        margin: 0;
-    }
-    .login-box {
-        background-color: #2a2a2a;
-        padding: 40px;
-        border-radius: 10px;
-        width: 350px;
-        text-align: center;
-        box-shadow: 0 4px 15px rgba(0,0,0,0.5);
-    }
-    h1 { color: #00aaff; margin-bottom: 30px; }
-    form { display: flex; flex-direction: column; gap: 20px; }
-    input {
-        padding: 12px;
-        border-radius: 5px;
-        border: none;
-        font-size: 1em;
-        text-align: center;
-        background-color: #3a3a3a;
-        color: #ffffff;
-    }
-    .input-group { position: relative; }
-    .eye-icon {
-        position: absolute;
-        right: 10px;
-        top: 50%;
-        transform: translateY(-50%);
-        cursor: pointer;
-        color: #00aaff;
-        font-size: 1.2em;
-    }
-    button {
-        padding: 12px;
-        border: none;
-        border-radius: 5px;
-        background-color: #00aaff;
-        color: white;
-        font-weight: bold;
-        cursor: pointer;
-        transition: 0.2s;
-    }
-    button:hover { background-color: #008ecc; }
-    .flash { color: #00aaff; margin-top: 10px; }
-</style>
-<script>
-function togglePassword() {
-    const passwordField = document.getElementById('password');
-    const eyeIcon = document.getElementById('eye-icon');
-    if (passwordField.type === 'password') {
-        passwordField.type = 'text';
-        eyeIcon.innerHTML = '🙈';
-    } else {
-        passwordField.type = 'password';
-        eyeIcon.innerHTML = '👁️';
-    }
-}
-</script>
+  <title>L1 AI Assistants - Login</title>
+  <style>
+    body { font-family: Arial, sans-serif; background: #f5f5f5; }
+    .header { background: #1c1c1c; color: white; padding: 20px; text-align: center; font-size: 24px; }
+    .login-box { background: white; width: 350px; margin: 100px auto; padding: 30px; border-radius: 8px; box-shadow: 0 4px 10px rgba(0,0,0,0.1); }
+    .login-box h2 { text-align: center; margin-bottom: 20px; }
+    .login-box input { width: 100%; padding: 10px; margin: 10px 0; border: 1px solid #ccc; border-radius: 5px; }
+    .login-box button { width: 100%; padding: 10px; background: #007aff; border: none; color: white; border-radius: 5px; cursor: pointer; font-size: 16px; }
+    .error { color: red; text-align: center; }
+  </style>
 </head>
 <body>
-<div class="login-box">
-    <h1>L1 AI Assistants</h1>
+  <div class="header">L1 AI Assistants</div>
+  <div class="login-box">
+    <h2>Login</h2>
     <form method="POST">
-        {{ form.hidden_tag() }}
-        <div class="input-group">
-            {{ form.username(id="username", placeholder="Username") }}
-        </div>
-        <div class="input-group">
-            {{ form.password(id="password", placeholder="Password") }}
-            <span id="eye-icon" class="eye-icon" onclick="togglePassword()">👁️</span>
-        </div>
-        {{ form.submit(class_="submit-btn") }}
+      <input type="text" name="username" placeholder="Username" required>
+      <input type="password" name="password" placeholder="Password" required>
+      <button type="submit">Login</button>
     </form>
-    {% with messages = get_flashed_messages(with_categories=true) %}
-        {% if messages %}
-            {% for category, message in messages %}
-                <div class="flash">{{ message }}</div>
-            {% endfor %}
-        {% endif %}
-    {% endwith %}
-</div>
+    {% if error %}
+      <p class="error">{{ error }}</p>
+    {% endif %}
+  </div>
 </body>
 </html>
 

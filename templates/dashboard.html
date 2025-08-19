@@ -1,217 +1,36 @@
-<!DOCTYPE html>
-<html lang="en">
+<!doctype html>
+<html>
 <head>
-  <meta charset="UTF-8" />
   <title>Admin Dashboard</title>
-  <meta name="viewport" content="width=device-width, initial-scale=1" />
   <style>
-    :root{
-      --bg:#0f1115;
-      --panel:#171a21;
-      --muted:#aab2c0;
-      --text:#e7ecf3;
-      --primary:#0a84ff; /* Apple-ish blue */
-      --danger:#ff4d4f;
-      --border:#232733;
-      --card:#141821;
-    }
-    *{box-sizing:border-box}
-    body{
-      margin:0;
-      background:var(--bg);
-      color:var(--text);
-      font-family: ui-sans-serif, system-ui, -apple-system, Segoe UI, Roboto, Arial, "Apple Color Emoji", "Segoe UI Emoji";
-      min-height:100vh;
-      display:flex;
-      flex-direction:column;
-    }
-    /* Header bar */
-    .header{
-      position:sticky; top:0;
-      width:100%;
-      background:var(--panel);
-      border-bottom:1px solid var(--border);
-      padding:16px 24px;
-      display:flex;
-      align-items:center;
-      justify-content:center;
-    }
-    .header-inner{
-      width:100%;
-      max-width:1100px;
-      display:flex;
-      align-items:center;
-      justify-content:center;
-      position:relative;
-    }
-    .title{
-      font-weight:700;
-      letter-spacing:.3px;
-      text-align:center;
-    }
-    .logout{
-      position:absolute;
-      right:0;
-      top:50%;
-      transform:translateY(-50%);
-      text-decoration:none;
-      color:var(--text);
-      padding:8px 14px;
-      background:transparent;
-      border:1px solid var(--border);
-      border-radius:10px;
-      transition:.2s;
-    }
-    .logout:hover{ border-color:var(--primary); color:var(--primary); }
-
-    .container{
-      width:100%;
-      max-width:1100px;
-      margin:24px auto;
-      padding:0 16px 40px;
-      display:grid;
-      gap:20px;
-    }
-
-    /* Card */
-    .card{
-      background:var(--card);
-      border:1px solid var(--border);
-      border-radius:14px;
-      padding:18px;
-    }
-    .card h2{
-      margin:0 0 12px 0;
-      font-size:18px;
-      color:var(--text);
-    }
-    .muted{ color:var(--muted); font-size:13px; }
-
-    /* Create company */
-    .row{
-      display:flex; gap:12px; align-items:center; flex-wrap:wrap;
-    }
-    .input{
-      flex:1 1 280px;
-      background:#0f1420;
-      color:var(--text);
-      border:1px solid var(--border);
-      border-radius:10px;
-      padding:12px 14px;
-      outline:none;
-    }
-    .btn{
-      padding:12px 16px;
-      border-radius:10px;
-      border:none;
-      cursor:pointer;
-      transition:.2s;
-      font-weight:600;
-    }
-    .btn-primary{ background:var(--primary); color:white; }
-    .btn-outline{ background:transparent; color:var(--text); border:1px solid var(--border); }
-    .btn-danger{ background:var(--danger); color:white; }
-
-    /* Companies block */
-    .companies-row{
-      display:flex; gap:10px; align-items:center; flex-wrap:wrap;
-    }
-    select{
-      flex:1 1 320px;
-      background:#0f1420;
-      color:var(--text);
-      border:1px solid var(--border);
-      border-radius:10px;
-      padding:12px 14px;
-      outline:none;
-      min-width:260px;
-    }
-
-    .flash{
-      list-style:none; padding:0; margin:0;
-    }
-    .flash li{ margin:6px 0; color:var(--danger); }
+    body { margin: 0; font-family: Arial, sans-serif; background: #f5f5f5; }
+    .header { background: #1c1c1c; color: white; padding: 15px; display: flex; justify-content: center; align-items: center; position: relative; }
+    .header h1 { margin: 0; }
+    .logout { position: absolute; right: 20px; top: 15px; }
+    .logout a { color: white; text-decoration: none; }
+    .content { padding: 30px; text-align: center; }
+    select, input, button { padding: 10px; margin: 10px; border-radius: 5px; border: 1px solid #ccc; }
   </style>
 </head>
 <body>
-  <header class="header">
-    <div class="header-inner">
-      <h1 class="title">Admin Dashboard</h1>
-      <a class="logout" href="{{ url_for('logout') }}">Logout</a>
-    </div>
-  </header>
-
-  <main class="container">
-    <!-- Create Company -->
-    <section class="card">
-      <h2>Create Company</h2>
-      <p class="muted">Create a new knowledge table and assistant space.</p>
-      <form action="{{ url_for('dashboard') }}" method="POST">
-        {{ form.hidden_tag() }}
-        <div class="row">
-          {{ form.name(class="input", placeholder="e.g., L1 Phones") }}
-          {{ form.submit(class="btn btn-primary", value="Create") }}
-        </div>
-      </form>
-    </section>
-
-    <!-- Companies dropdown -->
-    <section class="card">
-      <h2>Companies</h2>
-      <div class="companies-row">
-        <select id="company-select">
-          {% for c in companies %}
-            <option value="{{ c.id }}" data-name="{{ c.name }}">{{ c.name }}</option>
-          {% endfor %}
-        </select>
-        <button class="btn btn-outline" type="button" onclick="goManage()">Manage</button>
-        <button class="btn btn-outline" type="button" onclick="goAssistant()">Assistant</button>
-        <form id="delete-form" method="POST" style="display:inline;" onsubmit="return confirm('Delete this company and its knowledge table?');">
-          <button class="btn btn-danger" type="submit">Delete</button>
-        </form>
-      </div>
-    </section>
-
-    {% with messages = get_flashed_messages(with_categories=true) %}
-      {% if messages %}
-        <ul class="flash">
-          {% for category, message in messages %}
-            <li>{{ message }}</li>
-          {% endfor %}
-        </ul>
-      {% endif %}
-    {% endwith %}
-  </main>
-
-  <script>
-    function currentSelection(){
-      const sel = document.getElementById('company-select');
-      const id = sel.value;
-      const name = sel.options[sel.selectedIndex]?.dataset?.name;
-      return { id, name };
-    }
-    function goManage(){
-      const { id } = currentSelection();
-      if(!id) return;
-      window.location.href = `/manage/${id}`;
-    }
-    function goAssistant(){
-      const { name } = currentSelection();
-      if(!name) return;
-      // company_name is path param by name
-      window.location.href = `/agent/${encodeURIComponent(name)}`;
-    }
-    // Wire delete form action dynamically
-    (function(){
-      const delForm = document.getElementById('delete-form');
-      const sel = document.getElementById('company-select');
-      function setAction(){
-        const id = sel.value;
-        delForm.action = `/delete_company/${id}`;
-      }
-      sel.addEventListener('change', setAction);
-      setAction();
-    })();
-  </script>
+  <div class="header">
+    <h1>Admin Dashboard</h1>
+    <div class="logout"><a href="{{ url_for('logout') }}">Logout</a></div>
+  </div>
+  <div class="content">
+    <form method="POST">
+      <input type="text" name="company" placeholder="Create new company" required>
+      <button type="submit">Create</button>
+    </form>
+    <h2>Companies</h2>
+    <form method="GET">
+      <select onchange="if(this.value) window.location.href=this.value">
+        <option value="">Select a company</option>
+        {% for company in companies %}
+          <option value="{{ url_for('manage', company=company) }}">{{ company }}</option>
+        {% endfor %}
+      </select>
+    </form>
+  </div>
 </body>
 </html>

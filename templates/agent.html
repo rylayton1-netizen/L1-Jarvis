@@ -1,0 +1,53 @@
+<!doctype html>
+<html>
+<head>
+  <title>Agent Assistant - {{ company }}</title>
+  <style>
+    body { font-family: Arial, sans-serif; margin: 0; background: #f9f9f9; display: flex; flex-direction: column; height: 100vh; }
+    #chat-box { flex: 1; overflow-y: auto; padding: 20px; }
+    .user { text-align: right; margin: 10px; }
+    .bot { text-align: left; margin: 10px; background: #e6e6e6; padding: 10px; border-radius: 8px; display: inline-block; max-width: 70%; }
+    .input-bar { display: flex; padding: 10px; background: white; }
+    .input-bar input { flex: 1; padding: 10px; border: 1px solid #ccc; border-radius: 5px; }
+    .input-bar button { padding: 10px; margin-left: 10px; border: none; background: #007aff; color: white; border-radius: 5px; cursor: pointer; }
+    #thinking { display: none; font-style: italic; margin-left: 20px; }
+  </style>
+</head>
+<body>
+  <div id="chat-box"></div>
+  <div id="thinking">🤖 Thinking...</div>
+  <div class="input-bar">
+    <input type="text" id="message" placeholder="Type a message...">
+    <button onclick="sendMessage()">Send</button>
+  </div>
+
+  <script>
+    const chatBox = document.getElementById("chat-box");
+    const thinking = document.getElementById("thinking");
+
+    document.getElementById("message").addEventListener("keypress", function(e) {
+      if (e.key === "Enter") sendMessage();
+    });
+
+    async function sendMessage() {
+      let msg = document.getElementById("message").value.trim();
+      if (!msg) return;
+
+      chatBox.innerHTML += `<div class='user'><b>You:</b> ${msg}</div>`;
+      document.getElementById("message").value = "";
+      thinking.style.display = "block";
+
+      let res = await fetch("/chat/{{ company }}", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ message: msg })
+      });
+      let data = await res.json();
+
+      thinking.style.display = "none";
+      chatBox.innerHTML += `<div class='bot'>${data.reply.replace(/Answer:/g, "<b>Answer:</b>").replace(/Script:/g, "<br><br><b>Script:</b>")}</div>`;
+      chatBox.scrollTop = chatBox.scrollHeight;
+    }
+  </script>
+</body>
+</html>
