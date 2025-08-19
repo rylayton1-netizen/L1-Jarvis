@@ -1,79 +1,48 @@
 <!DOCTYPE html>
 <html lang="en">
 <head>
-<meta charset="UTF-8">
-<meta name="viewport" content="width=device-width, initial-scale=1.0">
-<title>{{ company.name }} - Manage</title>
-<link href="https://cdn.jsdelivr.net/npm/tailwindcss@3.3.2/dist/tailwind.min.css" rel="stylesheet">
-<style>
-#loader { display:none; }
-</style>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Manage Company</title>
+    <link href="https://cdn.jsdelivr.net/npm/tailwindcss@2.2.19/dist/tailwind.min.css" rel="stylesheet">
 </head>
 <body class="bg-gray-100">
-<header class="bg-gray-800 text-white p-4 text-center font-bold">{{ company.name }} - Manage</header>
+    <!-- Header -->
+    <header class="bg-gray-800 text-white py-4 text-center text-2xl font-bold">Manage Company</header>
 
-<div class="container mx-auto p-4">
-  {% with messages = get_flashed_messages(with_categories=true) %}
-    {% if messages %}
-      {% for category, msg in messages %}
-        <div class="p-2 my-2 rounded {{ 'bg-green-200 text-green-800' if category=='success' else 'bg-red-200 text-red-800' }}">{{ msg }}</div>
-      {% endfor %}
-    {% endif %}
-  {% endwith %}
+    <div class="container mx-auto mt-6">
+        <div class="flex justify-between mb-4">
+            <a href="{{ url_for('dashboard') }}" class="bg-gray-800 text-white px-4 py-2 rounded hover:bg-gray-900">Back to Dashboard</a>
+            <a href="{{ url_for('agent', company_id=company.id) }}" class="bg-blue-500 text-white px-4 py-2 rounded hover:bg-blue-600">Agent Assistant</a>
+        </div>
 
-  <form id="manualForm" action="{{ url_for('add_manual', company_id=company.id) }}" method="POST" class="mb-4">
-    <textarea name="manual_content" placeholder="Add manual knowledge..." class="w-full p-2 border rounded"></textarea>
-    <button type="submit" class="px-4 py-2 bg-blue-600 text-white rounded mt-2">Add Manual</button>
-  </form>
+        <!-- File upload / URL submit -->
+        <div class="bg-white p-6 rounded shadow space-y-4">
+            <form action="{{ url_for('manage', company_id=company.id) }}" method="POST" enctype="multipart/form-data" onsubmit="showLoading()">
+                <label class="block font-semibold mb-1">Upload Files / Submit URLs</label>
+                <input type="file" name="file" class="mb-2">
+                <input type="text" name="url" placeholder="Enter URL" class="w-full p-2 border rounded mb-2">
+                <button type="submit" class="bg-green-500 text-white px-4 py-2 rounded hover:bg-green-600">Submit</button>
+            </form>
+            <div id="loading" class="hidden text-center text-blue-500">Submitting...</div>
+        </div>
 
-  <form id="urlForm" action="{{ url_for('add_url', company_id=company.id) }}" method="POST" class="mb-4 flex space-x-2">
-    <input type="text" name="url" placeholder="Add URL..." class="flex-1 p-2 border rounded">
-    <button type="submit" class="px-4 py-2 bg-blue-600 text-white rounded">Add URL</button>
-  </form>
+        <!-- Database Entries -->
+        <div class="mt-6 space-y-2">
+            <h2 class="font-bold text-lg">Company Data</h2>
+            {% for item in data %}
+            <div class="bg-gray-200 p-2 rounded flex justify-between items-center">
+                <span>{{ item.name_or_url }}</span>
+                <a href="{{ url_for('delete_entry', entry_id=item.id) }}" class="bg-red-500 text-white px-2 py-1 rounded hover:bg-red-600">Delete</a>
+            </div>
+            {% endfor %}
+        </div>
+    </div>
 
-  <form id="fileForm" action="{{ url_for('add_file', company_id=company.id) }}" method="POST" enctype="multipart/form-data" class="mb-4 flex space-x-2">
-    <input type="file" name="file" class="p-2 border rounded flex-1">
-    <button type="submit" class="px-4 py-2 bg-blue-600 text-white rounded">Upload File</button>
-  </form>
-
-  <div id="loader" class="text-gray-500">Processing...</div>
-
-  <h2 class="mt-6 font-bold">Knowledge Items</h2>
-  <table class="w-full table-auto bg-white rounded shadow">
-    <thead class="bg-gray-200">
-      <tr>
-        <th class="p-2">Source</th>
-        <th class="p-2">Type</th>
-        <th class="p-2">Actions</th>
-      </tr>
-    </thead>
-    <tbody>
-      {% for k in knowledge %}
-      <tr class="border-t">
-        <td class="p-2">{{ k.source_name }}</td>
-        <td class="p-2">{{ k.source_type }}</td>
-        <td class="p-2 space-x-2">
-          <form action="{{ url_for('delete_knowledge', item_id=k.id) }}" method="POST" class="inline">
-            <button type="submit" class="px-2 py-1 bg-red-600 text-white rounded">Delete</button>
-          </form>
-        </td>
-      </tr>
-      {% endfor %}
-    </tbody>
-  </table>
-</div>
-
-<footer class="bg-gray-800 text-white p-4 text-right">
-  <a href="{{ url_for('dashboard') }}" class="px-3 py-1 bg-gray-600 rounded">Back</a>
-  <a href="{{ url_for('agent', company_id=company.id) }}" class="px-3 py-1 bg-green-600 rounded">Agent Assistant</a>
-</footer>
-
-<script>
-document.querySelectorAll('form').forEach(f=>{
-  f.addEventListener('submit', ()=>{
-    document.getElementById('loader').style.display='block';
-  });
-});
-</script>
+    <script>
+        function showLoading() {
+            document.getElementById('loading').classList.remove('hidden');
+        }
+    </script>
 </body>
 </html>
