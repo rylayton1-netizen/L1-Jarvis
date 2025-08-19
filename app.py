@@ -1,9 +1,14 @@
 import os
 from flask import Flask, render_template, request, redirect, url_for, session, jsonify, flash
 from flask_sqlalchemy import SQLAlchemy
+from flask_migrate import Migrate
 from werkzeug.security import generate_password_hash, check_password_hash
 from werkzeug.utils import secure_filename
 import openai
+from dotenv import load_dotenv
+
+# Load environment variables
+load_dotenv()
 
 # ========================
 # CONFIGURATION
@@ -11,14 +16,12 @@ import openai
 app = Flask(__name__)
 app.secret_key = os.environ.get("SECRET_KEY", "supersecretkey")
 
-# Database URL from environment variable
-app.config['SQLALCHEMY_DATABASE_URI'] = os.environ.get(
-    "DATABASE_URL", "sqlite:///l1_jarvis.db"
-)
+# Database configuration
+app.config['SQLALCHEMY_DATABASE_URI'] = os.environ.get("DATABASE_URL", "sqlite:///l1_jarvis.db")
 app.config['SQLALCHEMY_TRACK_MODIFICATIONS'] = False
 
-# Upload folder
-UPLOAD_FOLDER = os.path.join(os.getcwd(), 'uploads')
+# Upload folder (use temporary directory for Heroku)
+UPLOAD_FOLDER = os.environ.get('UPLOAD_PATH', os.path.join(os.getcwd(), 'Uploads'))
 os.makedirs(UPLOAD_FOLDER, exist_ok=True)
 app.config['UPLOAD_FOLDER'] = UPLOAD_FOLDER
 
@@ -26,6 +29,7 @@ app.config['UPLOAD_FOLDER'] = UPLOAD_FOLDER
 ALLOWED_EXTENSIONS = {'txt', 'pdf', 'csv', 'docx'}
 
 db = SQLAlchemy(app)
+migrate = Migrate(app, db)
 
 # ========================
 # DATABASE MODELS
@@ -60,13 +64,20 @@ def allowed_file(filename):
 @app.route('/login', methods=['GET', 'POST'])
 def login():
     if request.method == 'POST':
-        username = request.form['username']
-        password = request.form['password']
-        user = User.query.filter_by(username=username).first()
-        if user and check_password_hash(user.password_hash, password):
-            session['user_id'] = user.id
-            return redirect(url_for('dashboard'))
-        flash("Invalid username or password", "error")
+        try:
+            username = request.form['username']
+            password = request.form['password']
+            user = User.query.filter_by(username=username).first()
+            print(f"User found: {user}")  # Debug
+            if user and check_password_hash(user.password_hash, password):
+                session['user_id'] = user.id
+                print(f"Session set: user_id = {session['user_id']}")  # Debug
+                return redirect(url_for('dashboard'))
+            flash("Invalid username or password", "error")
+        except Exception as e:
+            print(f"Login error: {e}")  # Log error
+            flash("An error occurred. Please try again.", "error")
+            return render_template('login.html'), 500
     return render_template('login.html')
 
 # -------- LOGOUT ROUTE --------
@@ -78,106 +89,116 @@ def logout():
 # -------- DASHBOARD ROUTE --------
 @app.route('/dashboard', methods=['GET', 'POST'])
 def dashboard():
-    if 'user_id' not in session:
-        return redirect(url_for('login'))
-
-    if request.method == 'POST':
-        company_name = request.form.get('company_name')
-        if company_name:
-            new_company = Company(name=company_name)
-            db.session.add(new_company)
-            db.session.commit()
-            flash("Company created", "success")
-            return redirect(url_for('dashboard'))
-
-    companies = Company.query.all()
-    return render_template('dashboard.html', companies=companies)
+    try:
+        print(f"Session in dashboard: {session.get('user_id')}")  # Debug
+        if 'user_id' not in session:
+            return redirect(url_for('login'))
+        if request.method == 'POST':
+            company_name = request.form.get('company_name')
+            if company_name:
+                new_company = Company(name=company_name)
+                db.session.add(new_company)
+                db.session.commit()
+                flash("Company created", "success")
+                return redirect(url_for('dashboard'))
+        companies = Company.query.all()
+        print(f"Companies: {companies}")  # Debug
+        return render_template('dashboard.html', companies=companies)
+    except Exception as e:
+        print(f"Dashboard error: {e}")  # Log error
+        flash("An error occurred. Please try again.", "error")
+        return render_template('dashboard.html', companies=[]), 500
 
 # -------- DELETE COMPANY --------
 @app.route('/delete_company/<int:company_id>')
 def delete_company(company_id):
-    if 'user_id' not in session:
-        return redirect(url_for('login'))
-
-    company = Company.query.get_or_404(company_id)
-    # Delete all company data first
-    CompanyData.query.filter_by(company_id=company.id).delete()
-    db.session.delete(company)
-    db.session.commit()
-    flash("Company deleted", "success")
-    return redirect(url_for('dashboard'))
+    try:
+        if 'user_id' not in session:
+            return redirect(url_for('login'))
+        company = Company.query.get_or_404(company_id)
+        CompanyData.query.filter_by(company_id=company.id).delete()
+        db.session.delete(company)
+        db.session.commit()
+        flash("Company deleted", "success")
+        return redirect(url_for('dashboard'))
+    except Exception as e:
+        print(f"Delete company error: {e}")
+        flash("An error occurred. Please try again.", "error")
+        return redirect(url_for('dashboard'))
 
 # -------- MANAGE COMPANY DATA --------
 @app.route('/manage/<int:company_id>', methods=['GET', 'POST'])
 def manage(company_id):
-    if 'user_id' not in session:
-        return redirect(url_for('login'))
-
-    company = Company.query.get_or_404(company_id)
-
-    if request.method == 'POST':
-        # Handle file upload
-        file = request.files.get('file')
-        if file and allowed_file(file.filename):
-            filename = secure_filename(file.filename)
-            file.save(os.path.join(app.config['UPLOAD_FOLDER'], filename))
-            entry = CompanyData(company_id=company.id, filename=filename, name_or_url=filename)
-            db.session.add(entry)
+    try:
+        if 'user_id' not in session:
+            return redirect(url_for('login'))
+        company = Company.query.get_or_404(company_id)
+        if request.method == 'POST':
+            file = request.files.get('file')
+            url_text = request.form.get('url')
+            if file and allowed_file(file.filename):
+                filename = secure_filename(file.filename)
+                file.save(os.path.join(app.config['UPLOAD_FOLDER'], filename))
+                entry = CompanyData(company_id=company.id, filename=filename, name_or_url=filename)
+                db.session.add(entry)
+            if url_text:
+                entry = CompanyData(company_id=company.id, name_or_url=url_text)
+                db.session.add(entry)
             db.session.commit()
-        
-        # Handle URL submit
-        url_text = request.form.get('url')
-        if url_text:
-            entry = CompanyData(company_id=company.id, name_or_url=url_text)
-            db.session.add(entry)
-            db.session.commit()
-
-        flash("Data submitted", "success")
-        return redirect(url_for('manage', company_id=company.id))
-
-    data = CompanyData.query.filter_by(company_id=company.id).all()
-    return render_template('manage.html', company=company, data=data)
+            flash("Data submitted", "success")
+            return redirect(url_for('manage', company_id=company.id))
+        data = CompanyData.query.filter_by(company_id=company.id).all()
+        return render_template('manage.html', company=company, data=data)
+    except Exception as e:
+        print(f"Manage error: {e}")
+        flash("An error occurred. Please try again.", "error")
+        return redirect(url_for('dashboard'))
 
 # -------- DELETE COMPANY DATA ENTRY --------
 @app.route('/delete_entry/<int:entry_id>')
 def delete_entry(entry_id):
-    if 'user_id' not in session:
-        return redirect(url_for('login'))
-
-    entry = CompanyData.query.get_or_404(entry_id)
-    if entry.filename:
-        try:
-            os.remove(os.path.join(app.config['UPLOAD_FOLDER'], entry.filename))
-        except FileNotFoundError:
-            pass
-    db.session.delete(entry)
-    db.session.commit()
-    flash("Entry deleted", "success")
-    return redirect(request.referrer or url_for('dashboard'))
+    try:
+        if 'user_id' not in session:
+            return redirect(url_for('login'))
+        entry = CompanyData.query.get_or_404(entry_id)
+        if entry.filename:
+            try:
+                os.remove(os.path.join(app.config['UPLOAD_FOLDER'], entry.filename))
+            except FileNotFoundError:
+                pass
+        db.session.delete(entry)
+        db.session.commit()
+        flash("Entry deleted", "success")
+        return redirect(request.referrer or url_for('dashboard'))
+    except Exception as e:
+        print(f"Delete entry error: {e}")
+        flash("An error occurred. Please try again.", "error")
+        return redirect(url_for('dashboard'))
 
 # -------- AGENT ASSISTANT ROUTE --------
 @app.route('/agent/<int:company_id>')
 def agent(company_id):
-    if 'user_id' not in session:
-        return redirect(url_for('login'))
-
-    company = Company.query.get_or_404(company_id)
-    return render_template('agent.html', company=company)
+    try:
+        if 'user_id' not in session:
+            return redirect(url_for('login'))
+        company = Company.query.get_or_404(company_id)
+        return render_template('agent.html', company=company)
+    except Exception as e:
+        print(f"Agent error: {e}")
+        flash("An error occurred. Please try again.", "error")
+        return redirect(url_for('dashboard'))
 
 # -------- AGENT ASSISTANT API --------
 @app.route('/agent_api', methods=['POST'])
 def agent_api():
-    if 'user_id' not in session:
-        return jsonify({"error": "Unauthorized"}), 401
-
-    data = request.get_json()
-    user_message = data.get('message')
-
-    if not user_message:
-        return jsonify({"answer": "No input received", "script": ""})
-
-    openai.api_key = os.environ.get("OPENAI_API_KEY")
     try:
+        if 'user_id' not in session:
+            return jsonify({"error": "Unauthorized"}), 401
+        data = request.get_json()
+        user_message = data.get('message')
+        if not user_message:
+            return jsonify({"answer": "No input received", "script": ""})
+        openai.api_key = os.environ.get("OPENAI_API_KEY")
         response = openai.ChatCompletion.create(
             model="gpt-4",
             messages=[
@@ -187,19 +208,18 @@ def agent_api():
             max_tokens=500
         )
         answer_text = response['choices'][0]['message']['content']
-        # Optionally split into answer/script
-        answer, script = answer_text, ""  # modify parsing if needed
-
+        answer, script = answer_text, ""  # Modify parsing if needed
+        return jsonify({"answer": answer, "script": script})
     except Exception as e:
-        answer, script = "Error: " + str(e), ""
-
-    return jsonify({"answer": answer, "script": script})
+        print(f"Agent API error: {e}")
+        return jsonify({"answer": f"Error: {str(e)}", "script": ""}), 500
 
 # ========================
 # INITIALIZE DB
 # ========================
 with app.app_context():
     db.create_all()
+    print("Database tables created")  # Debug
 
 # ========================
 # RUN APP

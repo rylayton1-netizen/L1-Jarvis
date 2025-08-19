@@ -5,40 +5,57 @@
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>Manage Company</title>
     <link href="https://cdn.jsdelivr.net/npm/tailwindcss@2.2.19/dist/tailwind.min.css" rel="stylesheet">
+    <style>
+        .fade-in { animation: fadeIn 0.5s ease-in; }
+        @keyframes fadeIn { from { opacity: 0; transform: translateY(-10px); } to { opacity: 1; transform: translateY(0); } }
+        .loading::after {
+            content: '';
+            display: inline-block;
+            width: 1em;
+            text-align: left;
+            animation: dots 1s steps(5, end) infinite;
+        }
+        @keyframes dots {
+            0%, 20% { content: ''; }
+            40% { content: '.'; }
+            60% { content: '..'; }
+            80%, 100% { content: '...'; }
+        }
+    </style>
 </head>
 <body class="bg-gray-100">
-    <!-- Header -->
     <header class="bg-gray-800 text-white py-4 text-center text-2xl font-bold">Manage Company</header>
-
     <div class="container mx-auto mt-6">
+        {% with messages = get_flashed_messages(category_filter=["success", "error"]) %}
+            {% if messages %}
+                <div class="bg-green-100 text-green-700 p-3 mb-4 rounded-lg border border-green-300">
+                    {{ messages[0] }}
+                </div>
+            {% endif %}
+        {% endwith %}
         <div class="flex justify-between mb-4">
-            <a href="{{ url_for('dashboard') }}" class="bg-gray-800 text-white px-4 py-2 rounded hover:bg-gray-900">Back to Dashboard</a>
-            <a href="{{ url_for('agent', company_id=company.id) }}" class="bg-blue-500 text-white px-4 py-2 rounded hover:bg-blue-600">Agent Assistant</a>
+            <a href="{{ url_for('dashboard') }}" class="bg-gray-800 text-white px-4 py-2 rounded hover:bg-gray-900 transition duration-200">Back to Dashboard</a>
+            <a href="{{ url_for('agent', company_id=company.id) }}" class="bg-blue-500 text-white px-4 py-2 rounded hover:bg-blue-600 transition duration-200">Agent Assistant</a>
         </div>
-
-        <!-- File upload / URL submit -->
-        <div class="bg-white p-6 rounded shadow space-y-4">
+        <div class="bg-white p-6 rounded-lg shadow-lg space-y-4 fade-in">
             <form action="{{ url_for('manage', company_id=company.id) }}" method="POST" enctype="multipart/form-data" onsubmit="showLoading()">
-                <label class="block font-semibold mb-1">Upload Files / Submit URLs</label>
-                <input type="file" name="file" class="mb-2">
-                <input type="text" name="url" placeholder="Enter URL" class="w-full p-2 border rounded mb-2">
-                <button type="submit" class="bg-green-500 text-white px-4 py-2 rounded hover:bg-green-600">Submit</button>
+                <label class="block font-semibold mb-1 text-gray-700">Upload Files / Submit URLs</label>
+                <input type="file" name="file" class="mb-2 w-full p-2 border rounded focus:outline-none focus:ring-2 focus:ring-green-500 transition">
+                <input type="text" name="url" placeholder="Enter URL" class="w-full p-2 border rounded mb-2 focus:outline-none focus:ring-2 focus:ring-green-500 transition">
+                <button type="submit" class="bg-green-500 text-white px-4 py-2 rounded hover:bg-green-600 transition duration-200">Submit</button>
             </form>
-            <div id="loading" class="hidden text-center text-blue-500">Submitting...</div>
+            <div id="loading" class="hidden text-center text-blue-500 loading">Submitting</div>
         </div>
-
-        <!-- Database Entries -->
         <div class="mt-6 space-y-2">
             <h2 class="font-bold text-lg">Company Data</h2>
             {% for item in data %}
-            <div class="bg-gray-200 p-2 rounded flex justify-between items-center">
+            <div class="bg-gray-200 p-2 rounded flex justify-between items-center hover:bg-gray-300 transition fade-in">
                 <span>{{ item.name_or_url }}</span>
-                <a href="{{ url_for('delete_entry', entry_id=item.id) }}" class="bg-red-500 text-white px-2 py-1 rounded hover:bg-red-600">Delete</a>
+                <a href="{{ url_for('delete_entry', entry_id=item.id) }}" class="bg-red-500 text-white px-2 py-1 rounded hover:bg-red-600 transition">Delete</a>
             </div>
             {% endfor %}
         </div>
     </div>
-
     <script>
         function showLoading() {
             document.getElementById('loading').classList.remove('hidden');

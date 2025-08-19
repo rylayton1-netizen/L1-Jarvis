@@ -5,31 +5,34 @@
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>L1 AI Assistants - Login</title>
     <link href="https://cdn.jsdelivr.net/npm/tailwindcss@2.2.19/dist/tailwind.min.css" rel="stylesheet">
+    <style>
+        .fade-in { animation: fadeIn 0.5s ease-in; }
+        @keyframes fadeIn { from { opacity: 0; transform: translateY(-10px); } to { opacity: 1; transform: translateY(0); } }
+    </style>
 </head>
 <body class="bg-gray-100 flex items-center justify-center h-screen">
-    <div class="bg-white p-10 rounded shadow-lg w-full max-w-md">
-        <h1 class="text-3xl font-bold text-center mb-6 text-gray-800">L1 AI Assistants</h1>
+    <div class="bg-white p-10 rounded-lg shadow-lg w-full max-w-md fade-in">
+        <header class="bg-gray-800 text-white py-4 text-center text-2xl font-bold rounded-t-lg">L1 AI Assistants</header>
         {% with messages = get_flashed_messages(category_filter=["error"]) %}
             {% if messages %}
-                <div class="bg-red-100 text-red-700 p-2 mb-4 rounded">{{ messages[0] }}</div>
+                <div class="bg-red-100 text-red-700 p-3 mb-4 rounded-lg border border-red-300">{{ messages[0] }}</div>
             {% endif %}
         {% endwith %}
         <form action="{{ url_for('login') }}" method="POST" class="space-y-4">
             <div>
                 <label class="block text-gray-700 font-semibold mb-1">Username</label>
-                <input type="text" name="username" class="w-full p-2 border rounded focus:outline-none focus:ring-2 focus:ring-blue-500">
+                <input type="text" name="username" class="w-full p-2 border rounded focus:outline-none focus:ring-2 focus:ring-blue-500 transition">
             </div>
             <div>
                 <label class="block text-gray-700 font-semibold mb-1">Password</label>
                 <div class="relative">
-                    <input type="password" name="password" id="password" class="w-full p-2 border rounded focus:outline-none focus:ring-2 focus:ring-blue-500">
-                    <button type="button" onclick="togglePassword()" class="absolute right-2 top-2 text-gray-500">👁️</button>
+                    <input type="password" name="password" id="password" class="w-full p-2 border rounded focus:outline-none focus:ring-2 focus:ring-blue-500 transition">
+                    <button type="button" onclick="togglePassword()" class="absolute right-2 top-2 text-gray-500 hover:text-gray-700">👁️</button>
                 </div>
             </div>
-            <button type="submit" class="w-full bg-blue-500 text-white py-2 rounded hover:bg-blue-600">Login</button>
+            <button type="submit" class="w-full bg-blue-500 text-white py-2 rounded hover:bg-blue-600 transition duration-200">Login</button>
         </form>
     </div>
-
     <script>
         function togglePassword() {
             const pass = document.getElementById('password');
@@ -38,4 +41,3 @@
     </script>
 </body>
 </html>
-

@@ -6,7 +6,8 @@
     <title>Agent Assistant</title>
     <link href="https://cdn.jsdelivr.net/npm/tailwindcss@2.2.19/dist/tailwind.min.css" rel="stylesheet">
     <style>
-        /* Animated dots for thinking */
+        .fade-in { animation: fadeIn 0.5s ease-in; }
+        @keyframes fadeIn { from { opacity: 0; transform: translateY(-10px); } to { opacity: 1; transform: translateY(0); } }
         .dots::after {
             content: '';
             display: inline-block;
@@ -23,75 +24,64 @@
     </style>
 </head>
 <body class="bg-gray-100 flex flex-col h-screen">
-
     <header class="bg-gray-800 text-white py-4 px-6 flex justify-between items-center">
         <div class="text-2xl font-bold">Agent Assistant</div>
-        <a href="{{ url_for('dashboard') }}" class="bg-gray-700 px-4 py-2 rounded hover:bg-gray-900">Logout</a>
+        <a href="{{ url_for('dashboard') }}" class="bg-gray-700 px-4 py-2 rounded hover:bg-gray-900 transition duration-200">Back to Dashboard</a>
     </header>
-
     <div class="flex-1 overflow-auto p-4" id="chat-container">
-        <!-- Messages will appear here -->
+        {% with messages = get_flashed_messages(category_filter=["error"]) %}
+            {% if messages %}
+                <div class="bg-red-100 text-red-700 p-3 mb-4 rounded-lg border border-red-300 fade-in">
+                    {{ messages[0] }}
+                </div>
+            {% endif %}
+        {% endwith %}
     </div>
-
     <form id="chat-form" class="flex p-4 bg-white">
-        <input type="text" id="chat-input" class="flex-1 border p-2 rounded-l focus:outline-none focus:ring-2 focus:ring-blue-500" placeholder="Type a message...">
-        <button type="submit" class="bg-blue-500 text-white px-4 rounded-r hover:bg-blue-600">Send</button>
+        <input type="text" id="chat-input" class="flex-1 border p-2 rounded-l focus:outline-none focus:ring-2 focus:ring-blue-500 transition" placeholder="Type a message...">
+        <button type="submit" class="bg-blue-500 text-white px-4 rounded-r hover:bg-blue-600 transition duration-200">Send</button>
     </form>
-
     <script>
         const form = document.getElementById('chat-form');
         const input = document.getElementById('chat-input');
         const container = document.getElementById('chat-container');
-
         form.addEventListener('submit', async e => {
             e.preventDefault();
             const userMsg = input.value.trim();
             if (!userMsg) return;
-
-            // Show user message
             const userDiv = document.createElement('div');
-            userDiv.classList.add('text-right', 'mb-2');
+            userDiv.classList.add('text-right', 'mb-2', 'p-2', 'rounded-lg', 'bg-blue-100', 'fade-in');
             userDiv.innerHTML = `<strong>You:</strong> ${userMsg}`;
             container.appendChild(userDiv);
-
-            // Clear input
             input.value = '';
-
-            // Show thinking animation
             const thinkingDiv = document.createElement('div');
-            thinkingDiv.classList.add('text-left', 'mb-2', 'italic', 'text-gray-500', 'dots');
+            thinkingDiv.classList.add('text-left', 'mb-2', 'italic', 'text-gray-500', 'dots', 'fade-in');
             thinkingDiv.innerHTML = 'AI is thinking';
             container.appendChild(thinkingDiv);
             container.scrollTop = container.scrollHeight;
-
             try {
-                // Send request to backend
                 const response = await fetch('/agent_api', {
                     method: 'POST',
                     headers: {'Content-Type': 'application/json'},
                     body: JSON.stringify({message: userMsg})
                 });
                 const data = await response.json();
-
-                // Remove thinking
                 thinkingDiv.remove();
-
-                // Show AI response
                 const aiDiv = document.createElement('div');
-                aiDiv.classList.add('text-left', 'mb-4', 'bg-gray-200', 'p-2', 'rounded');
+                aiDiv.classList.add('text-left', 'mb-4', 'bg-gray-200', 'p-3', 'rounded-lg', 'shadow', 'fade-in');
                 aiDiv.innerHTML = `
                     <strong>Answer:</strong><br>${data.answer || "No response"}<br><br>
                     <strong>Script:</strong><br>${data.script || "No script available"}
                 `;
                 container.appendChild(aiDiv);
                 container.scrollTop = container.scrollHeight;
-
             } catch (error) {
                 thinkingDiv.remove();
                 const errorDiv = document.createElement('div');
-                errorDiv.classList.add('text-left', 'mb-4', 'bg-red-100', 'p-2', 'rounded', 'text-red-700');
+                errorDiv.classList.add('text-left', 'mb-4', 'bg-red-100', 'p-3', 'rounded-lg', 'text-red-700', 'fade-in');
                 errorDiv.innerHTML = 'Error: Failed to get AI response.';
                 container.appendChild(errorDiv);
+                container.scrollTop = container.scrollHeight;
             }
         });
     </script>
