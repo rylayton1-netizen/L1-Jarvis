@@ -6,6 +6,7 @@ from werkzeug.security import generate_password_hash, check_password_hash
 from werkzeug.utils import secure_filename
 import openai
 from dotenv import load_dotenv
+from sqlalchemy import text
 
 # Load environment variables
 load_dotenv()
@@ -18,11 +19,13 @@ def create_app():
     app.secret_key = os.environ.get("SECRET_KEY", "supersecretkey")
 
     # Database configuration
-    app.config['SQLALCHEMY_DATABASE_URI'] = os.environ.get("DATABASE_URL", "sqlite:///l1_jarvis.db")
+    app.config['SQLALCHEMY_DATABASE_URI'] = os.environ.get(
+        "DATABASE_URL", "sqlite:///l1_jarvis.db"
+    )
     app.config['SQLALCHEMY_TRACK_MODIFICATIONS'] = False
 
     # Upload folder (cloud-friendly)
-    UPLOAD_FOLDER = os.environ.get('UPLOAD_PATH', '/tmp/uploads')
+    UPLOAD_FOLDER = os.environ.get('UPLOAD_PATH', 'Uploads')
     os.makedirs(UPLOAD_FOLDER, exist_ok=True)
     app.config['UPLOAD_FOLDER'] = UPLOAD_FOLDER
 
@@ -59,34 +62,19 @@ class CompanyData(db.Model):
 def allowed_file(filename):
     return '.' in filename and filename.rsplit('.', 1)[1].lower() in app.config['ALLOWED_EXTENSIONS']
 
-# ========================
-# DATABASE CONNECTION CHECK & DEFAULT ADMIN
-# ========================
 def check_database():
     try:
-        db.session.execute('SELECT 1')
-        app.logger.info("Database connection successful")
+        db.session.execute(text('SELECT 1'))
     except Exception as e:
         app.logger.error(f"Database connection failed: {e}")
         raise RuntimeError("Cannot connect to the database. Check DATABASE_URL.")
 
-with app.app_context():
-    try:
-        check_database()
-        db.create_all()
-
-        # Auto-create default admin if no users exist
-        if User.query.count() == 0:
-            default_admin = User(
-                username='admin',
-                password_hash=generate_password_hash('admin123')
-            )
-            db.session.add(default_admin)
-            db.session.commit()
-            app.logger.info("Default admin user created: username='admin', password='admin123'")
-    except Exception as e:
-        app.logger.error(f"Error initializing database: {e}")
-        raise
+def create_default_admin():
+    if not User.query.filter_by(username="admin").first():
+        admin = User(username="admin", password_hash=generate_password_hash("admin123"))
+        db.session.add(admin)
+        db.session.commit()
+        print("Default admin created: username='admin', password='admin123'")
 
 # ========================
 # ROUTES
@@ -199,6 +187,14 @@ def agent_api():
     answer_text = response['choices'][0]['message']['content']
     answer, script = answer_text, ""
     return jsonify({"answer": answer, "script": script})
+
+# ========================
+# INITIALIZE DB & ADMIN
+# ========================
+with app.app_context():
+    check_database()
+    db.create_all()
+    create_default_admin()
 
 # ========================
 # RUN APP
