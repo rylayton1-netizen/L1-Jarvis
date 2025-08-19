@@ -1,59 +1,46 @@
-{% extends "base.html" %}
-{% block title %}Agent Assistant{% endblock %}
-{% block content %}
-<div class="flex justify-between mb-4">
-    <h2 class="text-xl font-bold">Agent Assistant - {{ company.name }}</h2>
-    <a href="{{ url_for('dashboard') }}" class="bg-gray-700 text-white px-4 py-2 rounded hover:bg-gray-900">Dashboard</a>
-</div>
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Agent Assistant - {{ company.name }}</title>
+    <link href="https://cdn.jsdelivr.net/npm/tailwindcss@2.2.19/dist/tailwind.min.css" rel="stylesheet">
+</head>
+<body class="bg-gray-100">
+    <header class="bg-gray-800 text-white py-4 text-center text-2xl font-bold">
+        Agent Assistant - {{ company.name }}
+    </header>
+    <div class="container mx-auto mt-6">
+        <div class="bg-white p-6 rounded-lg shadow-lg">
+            <div id="chat-box" class="h-64 overflow-y-auto border p-4 mb-4 rounded"></div>
+            <input id="user-input" type="text" placeholder="Type your message..." class="w-full p-2 border rounded focus:outline-none focus:ring-2 focus:ring-blue-500 transition">
+            <button onclick="sendMessage()" class="mt-2 w-full bg-blue-500 text-white py-2 rounded hover:bg-blue-600 transition duration-200">Send</button>
+        </div>
+    </div>
+    <script>
+        async function sendMessage() {
+            const input = document.getElementById('user-input');
+            const message = input.value;
+            if (!message) return;
+            appendMessage('You', message);
+            input.value = '';
+            const res = await fetch('{{ url_for("agent_api") }}', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ message })
+            });
+            const data = await res.json();
+            appendMessage('AI', data.answer);
+        }
 
-<div id="chat-container" class="bg-white p-4 rounded shadow h-96 overflow-auto mb-4"></div>
-
-<form id="chat-form" class="flex space-x-2">
-    <input type="text" id="chat-input" placeholder="Type message..." class="flex-1 p-2 border rounded focus:ring-2 focus:ring-blue-500">
-    <button type="submit" class="bg-blue-500 text-white px-4 py-2 rounded hover:bg-blue-600">Send</button>
-</form>
-
-<script>
-const form = document.getElementById('chat-form');
-const input = document.getElementById('chat-input');
-const container = document.getElementById('chat-container');
-
-form.addEventListener('submit', async e => {
-    e.preventDefault();
-    const userMsg = input.value.trim();
-    if(!userMsg) return;
-    const userDiv = document.createElement('div');
-    userDiv.className = "text-right mb-2 p-2 rounded bg-blue-100";
-    userDiv.innerHTML = `<strong>You:</strong> ${userMsg}`;
-    container.appendChild(userDiv);
-    input.value = '';
-
-    const thinkingDiv = document.createElement('div');
-    thinkingDiv.className = "text-left mb-2 italic text-gray-500";
-    thinkingDiv.innerText = "AI is thinking...";
-    container.appendChild(thinkingDiv);
-    container.scrollTop = container.scrollHeight;
-
-    try {
-        const res = await fetch('/agent_api', {
-            method:'POST',
-            headers:{'Content-Type':'application/json'},
-            body:JSON.stringify({message: userMsg})
-        });
-        const data = await res.json();
-        thinkingDiv.remove();
-        const aiDiv = document.createElement('div');
-        aiDiv.className = "text-left mb-4 p-2 rounded bg-gray-200 shadow";
-        aiDiv.innerHTML = `<strong>Answer:</strong><br>${data.answer}<br><strong>Script:</strong><br>${data.script}`;
-        container.appendChild(aiDiv);
-        container.scrollTop = container.scrollHeight;
-    } catch(err) {
-        thinkingDiv.remove();
-        const errorDiv = document.createElement('div');
-        errorDiv.className = "text-left mb-4 p-2 rounded bg-red-100 text-red-700";
-        errorDiv.innerText = "Error: Failed to get AI response.";
-        container.appendChild(errorDiv);
-    }
-});
-</script>
-{% endblock %}
+        function appendMessage(sender, message) {
+            const box = document.getElementById('chat-box');
+            const msg = document.createElement('div');
+            msg.classList.add('mb-2');
+            msg.innerHTML = `<strong>${sender}:</strong> ${message}`;
+            box.appendChild(msg);
+            box.scrollTop = box.scrollHeight;
+        }
+    </script>
+</body>
+</html>

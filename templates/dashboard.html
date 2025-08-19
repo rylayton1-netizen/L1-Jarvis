@@ -1,36 +1,55 @@
-{% extends "base.html" %}
-{% block title %}Dashboard{% endblock %}
-{% block content %}
-<div class="container mx-auto">
-    <div class="flex justify-between mb-6">
-        <h2 class="text-xl font-bold">Admin Dashboard</h2>
-        <a href="{{ url_for('logout') }}" class="bg-gray-700 text-white px-4 py-2 rounded hover:bg-gray-900">Logout</a>
-    </div>
-
-    <form action="{{ url_for('dashboard') }}" method="POST" class="flex mb-6 space-x-2">
-        <input type="text" name="company_name" placeholder="Create Company" class="flex-1 p-2 border rounded focus:ring-2 focus:ring-green-500">
-        <button type="submit" class="bg-green-500 text-white px-4 py-2 rounded hover:bg-green-600">Create</button>
-    </form>
-
-    <div class="space-y-4">
-        {% for company in companies %}
-        <div class="flex justify-between items-center bg-white p-4 rounded shadow hover:shadow-lg transition">
-            <span class="font-bold">{{ company.name }}</span>
-            <div class="space-x-2">
-                <a href="{{ url_for('manage', company_id=company.id) }}" class="bg-green-500 text-white px-2 py-1 rounded hover:bg-green-600">Manage</a>
-                <a href="{{ url_for('agent', company_id=company.id) }}" class="bg-blue-500 text-white px-2 py-1 rounded hover:bg-blue-600">Agent</a>
-                <a href="{{ url_for('delete_company', company_id=company.id) }}" class="bg-red-500 text-white px-2 py-1 rounded hover:bg-red-600">Delete</a>
-                <button onclick="copyUrl('{{ company.id }}')" class="bg-gray-500 text-white px-2 py-1 rounded hover:bg-gray-600">Copy URL</button>
-            </div>
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Admin Dashboard</title>
+    <link href="https://cdn.jsdelivr.net/npm/tailwindcss@2.2.19/dist/tailwind.min.css" rel="stylesheet">
+    <style>
+        .fade-in { animation: fadeIn 0.5s ease-in; }
+        @keyframes fadeIn { from { opacity: 0; transform: translateY(-10px); } to { opacity: 1; transform: translateY(0); } }
+    </style>
+    <script>
+        function copyUrl(companyId) {
+            const url = `${window.location.origin}/agent/${companyId}`;
+            navigator.clipboard.writeText(url).then(() => {
+                alert("Agent Assistant URL copied to clipboard!");
+            });
+        }
+    </script>
+</head>
+<body class="bg-gray-100">
+    <header class="bg-gray-800 text-white py-4 px-6 flex justify-between items-center">
+        <div class="text-2xl font-bold">Admin Dashboard</div>
+        <a href="{{ url_for('logout') }}" class="bg-gray-700 px-4 py-2 rounded hover:bg-gray-900 transition duration-200">Logout</a>
+    </header>
+    <div class="container mx-auto mt-6">
+        {% with messages = get_flashed_messages(category_filter=["success", "error"]) %}
+            {% if messages %}
+                <div class="bg-green-100 text-green-700 p-3 mb-4 rounded-lg border border-green-300">
+                    {{ messages[0] }}
+                </div>
+            {% endif %}
+        {% endwith %}
+        <div class="bg-gray-900 text-white p-4 rounded-lg mb-6 fade-in">
+            <form action="{{ url_for('dashboard') }}" method="POST" class="flex space-x-2 items-center justify-center">
+                <input type="text" name="company_name" placeholder="Create Company" class="p-2 rounded text-black flex-1 focus:outline-none focus:ring-2 focus:ring-green-500 transition">
+                <button type="submit" class="bg-green-500 px-4 py-2 rounded hover:bg-green-600 transition duration-200">Create</button>
+            </form>
         </div>
-        {% endfor %}
+        <div class="space-y-4">
+            {% for company in companies %}
+            <div class="bg-white shadow-lg p-4 flex justify-between items-center rounded-lg fade-in hover:shadow-xl transition">
+                <div class="font-bold text-lg">{{ company.name }}</div>
+                <div class="space-x-2">
+                    <a href="{{ url_for('manage', company_id=company.id) }}" class="bg-green-500 text-white p-2 rounded hover:bg-green-600 transition">Manage</a>
+                    <a href="{{ url_for('agent', company_id=company.id) }}" class="bg-blue-500 text-white p-2 rounded hover:bg-blue-600 transition">Agent Assistant</a>
+                    <a href="{{ url_for('delete_company', company_id=company.id) }}" class="bg-red-500 text-white p-2 rounded hover:bg-red-600 transition">Delete</a>
+                    <button onclick="copyUrl('{{ company.id }}')" class="bg-gray-500 text-white p-2 rounded hover:bg-gray-600 transition">Copy URL</button>
+                </div>
+            </div>
+            {% endfor %}
+        </div>
     </div>
-</div>
-
-<script>
-function copyUrl(companyId) {
-    const url = `${window.location.origin}/agent/${companyId}`;
-    navigator.clipboard.writeText(url).then(() => alert("Agent Assistant URL copied!"));
-}
-</script>
-{% endblock %}
+</body>
+</html>
