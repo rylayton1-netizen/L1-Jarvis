@@ -3,26 +3,28 @@
 <head>
     <meta charset="UTF-8">
     <title>{% block title %}L1 AI Assistants{% endblock %}</title>
-    <link rel="stylesheet" href="{{ url_for('static', filename='style.css') }}">
+    <link href="https://cdn.jsdelivr.net/npm/tailwindcss@3.3.2/dist/tailwind.min.css" rel="stylesheet">
 </head>
-<body>
-    <header class="header">
-        <h1>L1 AI Assistants</h1>
+<body class="bg-gray-100">
+    <header class="bg-gray-800 text-white p-4">
+        <h1 class="text-xl font-bold">L1 AI Assistants</h1>
     </header>
-    <main>
+    <main class="p-4">
         {% with messages = get_flashed_messages(with_categories=true) %}
             {% if messages %}
-                <ul class="flashes">
+                <div class="space-y-2 mb-4">
                 {% for category, message in messages %}
-                    <li class="{{ category }}">{{ message }}</li>
+                    <div class="p-2 rounded {{ 'bg-green-100 text-green-700' if category=='success' else 'bg-red-100 text-red-700' }}">
+                        {{ message }}
+                    </div>
                 {% endfor %}
-                </ul>
+                </div>
             {% endif %}
         {% endwith %}
         {% block content %}{% endblock %}
     </main>
-    <footer class="footer">
-        {% block footer %}{% endblock %}
+    <footer class="bg-gray-800 text-white p-4 text-center">
+        &copy; {{ current_year if current_year else '2025' }} L1 AI Assistants
     </footer>
 </body>
 </html>
