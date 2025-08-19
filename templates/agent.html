@@ -34,8 +34,6 @@
             userDiv.classList.add('text-right', 'mb-2');
             userDiv.innerHTML = `<strong>You:</strong> ${userMsg}`;
             container.appendChild(userDiv);
-
-            // Clear input
             input.value = '';
 
             // Show thinking animation
@@ -45,24 +43,23 @@
             container.appendChild(thinkingDiv);
             container.scrollTop = container.scrollHeight;
 
-            // Send request to backend (replace with your Flask endpoint)
+            // Fetch AI response
             const response = await fetch('/agent_api', {
                 method: 'POST',
                 headers: {'Content-Type': 'application/json'},
                 body: JSON.stringify({message: userMsg})
             });
             const data = await response.json();
-
-            // Remove thinking
             thinkingDiv.remove();
 
-            // Show AI response
-            const aiDiv = document.createElement('div');
-            aiDiv.classList.add('text-left', 'mb-2');
-            aiDiv.innerHTML = `<strong>Answer:</strong> ${data.answer}<br><strong>Script:</strong> ${data.script}`;
-            container.appendChild(aiDiv);
-            container.scrollTop = container.scrollHeight;
-        });
-    </script>
-</body>
-</html>
+                        // Show AI response
+                        const aiDiv = document.createElement('div');
+                        aiDiv.classList.add('text-left', 'mb-2');
+                        aiDiv.innerHTML = `<strong>AI:</strong> ${data.reply || 'Sorry, no response.'}`;
+                        container.appendChild(aiDiv);
+                        container.scrollTop = container.scrollHeight;
+                    });
+                </script>
+            </body>
+            </html>
+
