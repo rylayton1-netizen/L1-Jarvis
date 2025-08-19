@@ -1,4 +1,6 @@
 import os
+import re
+import logging
 from flask import Flask, render_template, request, redirect, url_for, flash, jsonify
 from flask_sqlalchemy import SQLAlchemy
 from flask_login import LoginManager, UserMixin, login_user, login_required, logout_user
@@ -12,10 +14,11 @@ import validators
 import requests
 from bs4 import BeautifulSoup
 from openai import OpenAI
-import logging
+from sqlalchemy import text
+from sqlalchemy.exc import IntegrityError
 
-# --- Setup ---
-load_dotenv()  # Load environment variables from .env
+# ---------- Setup ----------
+load_dotenv()
 
 OPENAI_API_KEY = os.getenv("OPENAI_API_KEY")
 SECRET_KEY = os.getenv("SECRET_KEY")
@@ -32,13 +35,14 @@ app.config["SQLALCHEMY_DATABASE_URI"] = DATABASE_URL
 app.config["SQLALCHEMY_TRACK_MODIFICATIONS"] = False
 
 db = SQLAlchemy(app)
+
 login_manager = LoginManager(app)
 login_manager.login_view = "login"
 
 logging.basicConfig(level=logging.INFO)
-logger = logging.getLogger(__name__)
+logger = logging.getLogger("l1")
 
-# --- Models ---
+# ---------- Models ----------
 class User(db.Model, UserMixin):
     id = db.Column(db.Integer, primary_key=True)
     username = db.Column(db.String(80), unique=True, nullable=False)
@@ -49,7 +53,7 @@ class Company(db.Model):
     name = db.Column(db.String(80), unique=True, nullable=False)
     schema_name = db.Column(db.String(120), unique=True, nullable=False)
 
-# --- Forms ---
+# ---------- Forms ----------
 class LoginForm(FlaskForm):
     username = StringField("Username", validators=[DataRequired()])
     password = PasswordField("Password", validators=[DataRequired()])
@@ -65,12 +69,37 @@ class UploadForm(FlaskForm):
     url = StringField("Crawl URL", validators=[URL(require_tld=True, message="Invalid URL")])
     submit = SubmitField("Submit")
 
-# --- Login ---
+# ---------- Helpers ----------
+def sanitize_schema_name(raw: str) -> str:
+    """lowercase, convert spaces to _, remove anything not a-z0-9_"""
+    s = raw.strip().lower().replace(" ", "_")
+    s = re.sub(r"[^a-z0-9_]+", "", s)
+    if not s:
+        s = "company"
+    return s
+
+def table_name_for(company: Company) -> str:
+    # single flat table per company: knowledge_<schema_name>
+    safe = sanitize_schema_name(company.schema_name)
+    return f"knowledge_{safe}"
+
+def ensure_company_table_exists(company: Company):
+    tbl = table_name_for(company)
+    create_sql = text(f"""
+        CREATE TABLE IF NOT EXISTS {tbl} (
+            id SERIAL PRIMARY KEY,
+            content TEXT
+        )
+    """)
+    with db.engine.begin() as conn:
+        conn.execute(create_sql)
+
+# ---------- Login ----------
 @login_manager.user_loader
 def load_user(user_id):
     return User.query.get(int(user_id))
 
-# --- Routes ---
+# ---------- Routes ----------
 @app.route("/")
 def index():
     return redirect(url_for("login"))
@@ -97,122 +126,146 @@ def logout():
 def dashboard():
     form = CompanyForm()
     if form.validate_on_submit():
-        schema_name = form.name.data.replace(" ", "_").lower()
-        company = Company(name=form.name.data, schema_name=schema_name)
+        schema_name = sanitize_schema_name(form.name.data)
+        company = Company(name=form.name.data.strip(), schema_name=schema_name)
         try:
             db.session.add(company)
             db.session.commit()
-            # Create knowledge table for this company
-            table_query = f"""
-                CREATE TABLE IF NOT EXISTS knowledge_{schema_name} (
-                    id SERIAL PRIMARY KEY,
-                    content TEXT
-                )
-            """
-            db.session.execute(table_query)
-            db.session.commit()
+            ensure_company_table_exists(company)
             flash("Company created successfully", "success")
+        except IntegrityError:
+            db.session.rollback()
+            flash("Company name already exists", "error")
         except Exception as e:
             db.session.rollback()
-            logger.error(f"Error creating company: {str(e)}")
-            flash(f"Error creating company: {str(e)}", "error")
-    companies = Company.query.all()
+            logger.exception("Error creating company")
+            flash(f"Error creating company: {e}", "error")
+
+    companies = Company.query.order_by(Company.name.asc()).all()
     return render_template("dashboard.html", form=form, companies=companies)
 
 @app.route("/delete_company/<int:company_id>", methods=["POST"])
 @login_required
 def delete_company(company_id):
     company = Company.query.get_or_404(company_id)
+    # Optionally drop its knowledge table
     try:
+        tbl = table_name_for(company)
+        with db.engine.begin() as conn:
+            conn.execute(text(f"DROP TABLE IF EXISTS {tbl}"))
         db.session.delete(company)
         db.session.commit()
         flash(f"Deleted company {company.name}", "success")
     except Exception as e:
         db.session.rollback()
-        flash(f"Error deleting company: {str(e)}", "error")
+        logger.exception("Error deleting company")
+        flash(f"Error deleting company: {e}", "error")
     return redirect(url_for("dashboard"))
 
 @app.route("/manage/<int:company_id>", methods=["GET", "POST"])
 @login_required
 def manage(company_id):
     company = Company.query.get_or_404(company_id)
+    ensure_company_table_exists(company)
+
     form = UploadForm()
-    form.company_id.choices = [(c.id, c.name) for c in Company.query.all()]
+    form.company_id.choices = [(c.id, c.name) for c in Company.query.order_by(Company.name.asc()).all()]
     form.company_id.data = company_id
 
     if form.validate_on_submit():
-        schema = f"knowledge_{company.schema_name}"
+        tbl = table_name_for(company)
         try:
-            with db.engine.connect() as conn:
+            with db.engine.begin() as conn:
+
+                # Handle file upload
                 if form.file.data:
                     file = form.file.data
                     content = ""
                     if file.filename.endswith(".csv"):
                         df = pd.read_csv(file)
-                        content = df.to_string()
+                        content = df.to_string(index=False)
                     elif file.filename.endswith(".pdf"):
                         reader = PdfReader(file)
-                        content = "\n".join([page.extract_text() for page in reader.pages])
-                    conn.execute(f"INSERT INTO {schema} (content) VALUES (:content)", {"content": content})
+                        content = "\n".join([(p.extract_text() or "") for p in reader.pages])
+                    if content and content.strip():
+                        conn.execute(text(f"INSERT INTO {tbl} (content) VALUES (:content)"), {"content": content})
+                        flash("File content added successfully", "success")
+                    else:
+                        flash("Uploaded file contains no extractable text.", "warning")
 
+                # Handle URL crawl
                 if form.url.data:
-                    response = requests.get(form.url.data)
-                    soup = BeautifulSoup(response.text, "html.parser")
-                    content = soup.get_text(strip=True)
-                    conn.execute(f"INSERT INTO {schema} (content) VALUES (:content)", {"content": content})
+                    if not validators.url(form.url.data):
+                        flash("Invalid URL format", "error")
+                    else:
+                        r = requests.get(form.url.data, timeout=15)
+                        r.raise_for_status()
+                        soup = BeautifulSoup(r.text, "html.parser")
+                        page_text = soup.get_text(separator=" ", strip=True)
+                        if page_text and page_text.strip():
+                            conn.execute(text(f"INSERT INTO {tbl} (content) VALUES (:content)"), {"content": page_text})
+                            flash("URL content added successfully", "success")
+                        else:
+                            flash("No readable text found at URL.", "warning")
 
-            flash("Data added successfully", "success")
         except Exception as e:
-            logger.error(f"Error uploading data: {str(e)}")
-            flash(f"Error uploading data: {str(e)}", "error")
+            logger.exception("Error processing upload/crawl")
+            flash(f"Error processing upload/crawl: {e}", "error")
 
     return render_template("manage.html", form=form, company=company)
 
 @app.route("/agent/<company_name>")
 def agent(company_name):
     company = Company.query.filter_by(name=company_name).first_or_404()
+    ensure_company_table_exists(company)
     return render_template("index.html", company_name=company_name)
 
 @app.route("/query/<company_name>", methods=["POST"])
 def query(company_name):
     company = Company.query.filter_by(name=company_name).first_or_404()
-    query_text = request.form.get("query", "").strip()
-    if not query_text:
+    ensure_company_table_exists(company)
+
+    user_query = request.form.get("query", "").strip()
+    if not user_query:
         return jsonify({"answer": "Error: Query cannot be empty"})
 
-    schema = f"knowledge_{company.schema_name}"
+    tbl = table_name_for(company)
+
     try:
-        with db.engine.connect() as conn:
-            result = conn.execute(f"SELECT content FROM {schema} WHERE content LIKE :q", {"q": f"%{query_text}%"})
-            results = result.fetchall()
-            context = " ".join([row[0] for row in results]) if results else "No relevant information found."
+        # Postgres: ILIKE for case-insensitive search
+        like_param = f"%{user_query}%"
+        with db.engine.begin() as conn:
+            rows = conn.execute(
+                text(f"SELECT content FROM {tbl} WHERE content ILIKE :q"),
+                {"q": like_param}
+            ).fetchall()
+
+        context = " ".join([r[0] for r in rows]) if rows else "No relevant information found."
 
         prompt = (
             f"Based on this information: {context}\n\n"
-            f"Current date: August 19, 2025. Answer the question for a phone support agent "
-            f"handling inquiries about {company_name} emergency medications: {query_text}\n"
-            "Then, provide a professional script to say on the phone, prefixed with 'Script:'."
+            f"Answer the question for a phone support agent handling inquiries about {company.name}: {user_query}\n"
+            f"Then, provide a professional script to say on the phone, prefixed with 'Script:'."
         )
 
-        response = client.chat.completions.create(
+        resp = client.chat.completions.create(
             model="gpt-3.5-turbo",
             messages=[{"role": "user", "content": prompt}]
         )
-        answer = response.choices[0].message.content
+        answer = resp.choices[0].message.content
         return jsonify({"answer": answer})
     except Exception as e:
-        logger.error(f"Query error: {str(e)}")
-        return jsonify({"answer": f"Error: {str(e)}"})
+        logger.exception("Query error")
+        return jsonify({"answer": f"Error: {e}"})
 
-# --- Initialize DB ---
+@app.route("/health")
+def health():
+    return jsonify({"status": "healthy"})
+
+# ---------- Init DB ----------
 with app.app_context():
     db.create_all()
     if not User.query.first():
         admin = User(username="admin", password="password")
         db.session.add(admin)
         db.session.commit()
-
-# --- Run App ---
-if __name__ == "__main__":
-    port = int(os.environ.get("PORT", 5000))
-    app.run(host="0.0.0.0", port=port)
