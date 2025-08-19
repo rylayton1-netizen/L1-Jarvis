@@ -1,208 +1,100 @@
 <!DOCTYPE html>
 <html lang="en">
 <head>
-    <meta charset="UTF-8">
-    <title>{{ company_name | default('Jase Medical') }} Assistant</title>
-    <style>
-        body {
-            font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
-            background-color: #1a1a1a;
-            color: #ffffff;
-            margin: 0;
-            padding: 20px;
-            display: flex;
-            flex-direction: column;
-            min-height: 100vh;
-        }
-        h1 {
-            font-size: 2.5em;
-            margin-bottom: 20px;
-            text-align: center;
-        }
-        .container {
-            display: flex;
-            max-width: 1200px;
-            width: 100%;
-            margin: 0 auto;
-            gap: 20px;
-        }
-        .sidebar {
-            width: 250px;
-            flex-shrink: 0;
-        }
-        .category {
-            background-color: #2c2c2c;
-            border-radius: 8px;
-            margin-bottom: 10px;
-            padding: 15px;
-            cursor: pointer;
-        }
-        .category-header {
-            font-size: 1.2em;
-            font-weight: bold;
-        }
-        .subcategories {
-            display: none;
-            margin-top: 10px;
-        }
-        .subcategories.active {
-            display: block;
-        }
-        .subcategory {
-            background-color: #3a3a3a;
-            border-radius: 5px;
-            padding: 10px;
-            margin: 5px 0;
-            cursor: pointer;
-            transition: background-color 0.2s;
-        }
-        .subcategory:hover {
-            background-color: #4a4a4a;
-        }
-        .main-content {
-            flex: 1;
-            display: flex;
-            flex-direction: column;
-            gap: 20px;
-        }
-        .query-form {
-            display: flex;
-            gap: 10px;
-        }
-        input[type="text"] {
-            flex: 1;
-            padding: 10px;
-            border: none;
-            border-radius: 5px;
-            background-color: #3a3a3a;
-            color: #ffffff;
-            font-size: 1em;
-        }
-        button {
-            padding: 10px 20px;
-            border: none;
-            border-radius: 5px;
-            background-color: #007bff;
-            color: #ffffff;
-            font-size: 1em;
-            cursor: pointer;
-            transition: background-color 0.2s;
-        }
-        button:hover {
-            background-color: #0056b3;
-        }
-        .response-section {
-            background-color: #2c2c2c;
-            border-radius: 5px;
-            padding: 15px;
-            min-height: 100px;
-        }
-        .response-section h3 {
-            margin: 0 0 10px 0;
-            font-size: 1.1em;
-        }
-        #answer, #script {
-            white-space: pre-wrap;
-        }
-        .loader {
-            display: none;
-            border: 4px solid #f3f3f3;
-            border-top: 4px solid #007bff;
-            border-radius: 50%;
-            width: 30px;
-            height: 30px;
-            animation: spin 1s linear infinite;
-            margin: 10px auto;
-        }
-        .loader.active {
-            display: block;
-        }
-        @keyframes spin {
-            0% { transform: rotate(0deg); }
-            100% { transform: rotate(360deg); }
-        }
-    </style>
-    <script>
-        function toggleCategory(id) {
-            const subcategories = document.getElementById(id);
-            subcategories.classList.toggle('active');
-        }
-
-        function askQuery(query) {
-            const input = document.getElementById('queryInput');
-            input.value = query;
-            submitQuery();
-        }
-
-        function submitQuery() {
-            const formData = new FormData(document.getElementById('queryForm'));
-            const answerDiv = document.getElementById('answer');
-            const scriptDiv = document.getElementById('script');
-            const loader = document.getElementById('loader');
-            answerDiv.innerText = '';
-            scriptDiv.innerText = '';
-            loader.classList.add('active');
-
-            fetch('/query/{{ company_name | default("L1 Phones") }}', { method: 'POST', body: formData })
-                .then(res => res.json())
-                .then(data => {
-                    const parts = data.answer.split('Script:');
-                    answerDiv.innerText = parts[0].trim();
-                    scriptDiv.innerText = parts[1] ? parts[1].trim() : 'No script provided.';
-                    loader.classList.remove('active');
-                })
-                .catch(err => {
-                    answerDiv.innerText = 'Error: ' + err.message;
-                    loader.classList.remove('active');
-                });
-        }
-    </script>
+<meta charset="UTF-8">
+<title>{{ company_name }} Agent Assistant</title>
+<style>
+body, html { margin:0; padding:0; height:100%; font-family: Arial, sans-serif; background-color: #1a1a1a; color: #fff; }
+#chat-container {
+    display: flex;
+    flex-direction: column;
+    height: 100%;
+    width: 100%;
+}
+#chat-output {
+    flex: 1;
+    padding: 20px;
+    overflow-y: auto;
+    display: flex;
+    flex-direction: column;
+    gap: 12px;
+}
+.message {
+    padding: 10px 14px;
+    border-radius: 12px;
+    max-width: 75%;
+    word-wrap: break-word;
+}
+.user { background-color: #00aaff; color: #fff; align-self: flex-end; text-align: right; }
+.bot { background-color: #3a3a3a; color: #fff; align-self: flex-start; text-align: left; }
+#chat-input {
+    display: flex;
+    border-top: 1px solid #444;
+}
+#chat-input input {
+    flex: 1;
+    padding: 14px;
+    border: none;
+    background-color: #3a3a3a;
+    color: #fff;
+    font-size: 1em;
+}
+#chat-input button {
+    padding: 0 20px;
+    background-color: #00aaff;
+    color: #fff;
+    border: none;
+    cursor: pointer;
+}
+#chat-input button:hover { background-color: #008ecc; }
+</style>
 </head>
 <body>
-    <h1>{{ company_name | default('Jase Medical') }} Assistant</h1>
-    <div class="container">
-        <div class="sidebar">
-            <div class="category" onclick="toggleCategory('jase-case')">
-                <div class="category-header">Jase Case</div>
-                <div class="subcategories" id="jase-case">
-                    <div class="subcategory" onclick="askQuery('What is included in the Jase Case?')">What is included in the Jase Case?</div>
-                    <div class="subcategory" onclick="askQuery('How much does the Jase Case cost?')">How much does the Jase Case cost?</div>
-                    <div class="subcategory" onclick="askQuery('Is there a Jase Case for children?')">Is there a Jase Case for children?</div>
-                </div>
-            </div>
-            <div class="category" onclick="toggleCategory('jase-pantry')">
-                <div class="category-header">Jase Pantry</div>
-                <div class="subcategories" id="jase-pantry">
-                    <div class="subcategory" onclick="askQuery('What is Jase Daily?')">What is Jase Daily?</div>
-                    <div class="subcategory" onclick="askQuery('What conditions does Jase Daily cover?')">What conditions does Jase Daily cover?</div>
-                    <div class="subcategory" onclick="askQuery('What is UseCase UTI?')">What is UseCase UTI?</div>
-                    <div class="subcategory" onclick="askQuery('What is UseCase Parasites?')">What is UseCase Parasites?</div>
-                </div>
-            </div>
-            <div class="category" onclick="toggleCategory('customer-support')">
-                <div class="category-header">Customer Support</div>
-                <div class="subcategories" id="customer-support">
-                    <div class="subcategory" onclick="askQuery('How can I contact Jase Medical support?')">How can I contact Jase Medical support?</div>
-                    <div class="subcategory" onclick="askQuery('Does Jase Medical accept insurance?')">Does Jase Medical accept insurance?</div>
-                    <div class="subcategory" onclick="askQuery('How are Jase Medical orders processed?')">How are Jase Medical orders processed?</div>
-                </div>
-            </div>
-        </div>
-        <div class="main-content">
-            <form id="queryForm" class="query-form">
-                <input type="text" id="queryInput" name="query" placeholder="e.g., What's in the Jase Case?">
-                <button type="button" onclick="submitQuery()">Ask</button>
-            </form>
-            <div id="loader" class="loader"></div>
-            <div class="response-section">
-                <h3>Answer</h3>
-                <div id="answer"></div>
-            </div>
-            <div class="response-section">
-                <h3>Suggested Script</h3>
-                <div id="script"></div>
-            </div>
-        </div>
+<div id="chat-container">
+    <div id="chat-output"></div>
+    <div id="chat-input">
+        <input type="text" id="user-input" placeholder="Ask a question..." />
+        <button onclick="sendMessage()">Send</button>
     </div>
+</div>
+
+<script>
+const input = document.getElementById('user-input');
+
+input.addEventListener('keydown', function(e) {
+    if (e.key === 'Enter') {
+        e.preventDefault();
+        sendMessage();
+    }
+});
+
+async function sendMessage() {
+    const message = input.value.trim();
+    if (!message) return;
+    addMessage(message, 'user');
+    input.value = '';
+
+    try {
+        const res = await fetch(`/query/{{ company_name }}`, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
+            body: `query=${encodeURIComponent(message)}`
+        });
+        const data = await res.json();
+        addMessage(data.answer, 'bot');
+    } catch (err) {
+        addMessage("Error: Unable to get response", 'bot');
+    }
+}
+
+function addMessage(text, sender) {
+    const output = document.getElementById('chat-output');
+    const div = document.createElement('div');
+    div.classList.add('message', sender);
+    div.textContent = text;
+    output.appendChild(div);
+    output.scrollTop = output.scrollHeight;
+}
+</script>
 </body>
 </html>

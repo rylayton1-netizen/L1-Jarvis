@@ -1,25 +1,43 @@
 <!DOCTYPE html>
-<html>
+<html lang="en">
 <head>
-    <title>Manage {{ company.name }}</title>
-    <style>
-        body { font-family: Arial, sans-serif; background-color: #1a1a1a; color: #ffffff; padding: 20px; }
-        form { max-width: 400px; margin: 20px 0; }
-        input, select { display: block; width: 100%; padding: 10px; margin: 10px 0; border-radius: 5px; border: none; background-color: #3a3a3a; color: #ffffff; }
-        button { padding: 10px; background-color: #007bff; color: #ffffff; border: none; border-radius: 5px; cursor: pointer; }
-        button:hover { background-color: #0056b3; }
-        a { color: #007bff; }
-    </style>
+<meta charset="UTF-8">
+<title>Manage {{ company.name }}</title>
+<style>
+body { font-family: Arial, sans-serif; background-color: #1a1a1a; color: #fff; padding: 20px; }
+h1 { color: #00aaff; }
+a { color: #00aaff; text-decoration: none; margin-right: 10px; }
+a:hover { text-decoration: underline; }
+form { max-width: 500px; margin-top: 20px; display: flex; flex-direction: column; gap: 15px; }
+input, select, button { padding: 10px; border-radius: 5px; border: none; font-size: 1em; }
+input, select { background-color: #3a3a3a; color: #fff; }
+button { background-color: #00aaff; color: #fff; cursor: pointer; }
+button:hover { background-color: #008ecc; }
+.flash { color: #00aaff; margin-top: 10px; }
+.nav-buttons { display: flex; gap: 10px; margin-bottom: 15px; }
+</style>
 </head>
 <body>
-    <h1>Manage {{ company.name }}</h1>
-    <a href="{{ url_for('dashboard') }}">Back to Dashboard</a>
-    <form method="POST" enctype="multipart/form-data">
-        {{ form.hidden_tag() }}
-        {{ form.company_id() }}
-        {{ form.file.label }} {{ form.file() }}
-        {{ form.url.label }} {{ form.url() }}
-        {{ form.submit() }}
-    </form>
+<h1>Manage {{ company.name }}</h1>
+<div class="nav-buttons">
+    <a href="{{ url_for('dashboard') }}"><button>Back to Dashboard</button></a>
+    <a href="{{ url_for('agent', company_name=company.name) }}"><button>Agent Assistant</button></a>
+</div>
+
+<form method="POST" enctype="multipart/form-data">
+    {{ form.hidden_tag() }}
+    {{ form.company_id() }}
+    {{ form.file.label }} {{ form.file() }}
+    {{ form.url.label }} {{ form.url() }}
+    {{ form.submit() }}
+</form>
+
+{% with messages = get_flashed_messages(with_categories=true) %}
+    {% if messages %}
+        {% for category, message in messages %}
+            <div class="flash">{{ message }}</div>
+        {% endfor %}
+    {% endif %}
+{% endwith %}
 </body>
 </html>
