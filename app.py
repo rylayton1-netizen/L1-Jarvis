@@ -1,6 +1,7 @@
 import os
 from flask import Flask, render_template, request, redirect, url_for, session, jsonify, flash
 from flask_sqlalchemy import SQLAlchemy
+from flask_migrate import Migrate
 from werkzeug.security import generate_password_hash, check_password_hash
 from werkzeug.utils import secure_filename
 import openai
@@ -12,23 +13,27 @@ load_dotenv()
 # ========================
 # CONFIGURATION
 # ========================
-app = Flask(__name__)
-app.secret_key = os.environ.get("SECRET_KEY", "supersecretkey")
+def create_app():
+    app = Flask(__name__)
+    app.secret_key = os.environ.get("SECRET_KEY", "supersecretkey")
 
-# Database config (SQLite for local development)
-app.config['SQLALCHEMY_DATABASE_URI'] = os.environ.get("DATABASE_URL", "sqlite:///l1_jarvis.db")
-app.config['SQLALCHEMY_TRACK_MODIFICATIONS'] = False
+    # Database configuration
+    app.config['SQLALCHEMY_DATABASE_URI'] = os.environ.get("DATABASE_URL", "sqlite:///l1_jarvis.db")
+    app.config['SQLALCHEMY_TRACK_MODIFICATIONS'] = False
 
-# Upload folder
-UPLOAD_FOLDER = os.environ.get('UPLOAD_PATH', 'Uploads')
-os.makedirs(UPLOAD_FOLDER, exist_ok=True)
-app.config['UPLOAD_FOLDER'] = UPLOAD_FOLDER
+    # Upload folder (cloud-friendly)
+    UPLOAD_FOLDER = os.environ.get('UPLOAD_PATH', '/tmp/uploads')
+    os.makedirs(UPLOAD_FOLDER, exist_ok=True)
+    app.config['UPLOAD_FOLDER'] = UPLOAD_FOLDER
 
-# Allowed file types
-app.config['ALLOWED_EXTENSIONS'] = {'txt', 'pdf', 'csv', 'docx'}
+    # Allowed file extensions
+    app.config['ALLOWED_EXTENSIONS'] = {'txt', 'pdf', 'csv', 'docx'}
 
-# Initialize database
+    return app
+
+app = create_app()
 db = SQLAlchemy(app)
+migrate = Migrate(app, db)
 
 # ========================
 # DATABASE MODELS
@@ -53,6 +58,35 @@ class CompanyData(db.Model):
 # ========================
 def allowed_file(filename):
     return '.' in filename and filename.rsplit('.', 1)[1].lower() in app.config['ALLOWED_EXTENSIONS']
+
+# ========================
+# DATABASE CONNECTION CHECK & DEFAULT ADMIN
+# ========================
+def check_database():
+    try:
+        db.session.execute('SELECT 1')
+        app.logger.info("Database connection successful")
+    except Exception as e:
+        app.logger.error(f"Database connection failed: {e}")
+        raise RuntimeError("Cannot connect to the database. Check DATABASE_URL.")
+
+with app.app_context():
+    try:
+        check_database()
+        db.create_all()
+
+        # Auto-create default admin if no users exist
+        if User.query.count() == 0:
+            default_admin = User(
+                username='admin',
+                password_hash=generate_password_hash('admin123')
+            )
+            db.session.add(default_admin)
+            db.session.commit()
+            app.logger.info("Default admin user created: username='admin', password='admin123'")
+    except Exception as e:
+        app.logger.error(f"Error initializing database: {e}")
+        raise
 
 # ========================
 # ROUTES
@@ -163,13 +197,8 @@ def agent_api():
         max_tokens=500
     )
     answer_text = response['choices'][0]['message']['content']
-    return jsonify({"answer": answer_text, "script": ""})
-
-# ========================
-# INITIALIZE DB
-# ========================
-with app.app_context():
-    db.create_all()
+    answer, script = answer_text, ""
+    return jsonify({"answer": answer, "script": script})
 
 # ========================
 # RUN APP
