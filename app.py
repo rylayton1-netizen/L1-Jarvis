@@ -170,11 +170,14 @@ def query(company_name):
         context = ' '.join([row[0] for row in results])
     prompt = f"Based on this information: {context}\n\nCurrent date: August 18, 2025. Answer the question for a phone support agent handling inquiries about {company_name} emergency medications: {query}\nThen, provide a professional script to say on the phone, prefixed with 'Script:'."
     
-    response = client.chat.completions.create(
-        model="gpt-3.5-turbo",
-        messages=[{"role": "user", "content": prompt}]
-    )
-    answer = response.choices[0].message.content
+    try:
+        response = client.chat.completions.create(
+            model="gpt-3.5-turbo",
+            messages=[{"role": "user", "content": prompt}]
+        )
+        answer = response.choices[0].message.content
+    except Exception as e:
+        return jsonify({'answer': f"Error calling OpenAI: {str(e)}"})
     return jsonify({'answer': answer})
 
 @app.after_request
@@ -183,11 +186,15 @@ def add_headers(response):
     return response
 
 with app.app_context():
-    db.create_all()
-    if not User.query.first():
-        admin = User(username='admin', password='password')
-        db.session.add(admin)
-        db.session.commit()
+    try:
+        db.create_all()
+        if not User.query.first():
+            admin = User(username='admin', password='password')
+            db.session.add(admin)
+            db.session.commit()
+    except Exception as e:
+        print(f"Database initialization error: {str(e)}")
 
 if __name__ == '__main__':
-    app.run(host='0.0.0.0', port=int(os.environ.get('PORT', 5000)))
+    port = int(os.environ.get('PORT', 5000))
+    app.run(host='0.0.0.0', port=port)
