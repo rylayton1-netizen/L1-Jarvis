@@ -1,46 +1,60 @@
 <!DOCTYPE html>
 <html lang="en">
 <head>
-    <meta charset="UTF-8">
-    <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>Agent Assistant - {{ company.name }}</title>
-    <link href="https://cdn.jsdelivr.net/npm/tailwindcss@2.2.19/dist/tailwind.min.css" rel="stylesheet">
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0"/>
+  <title>Agent Assistant - {{ company.name }}</title>
+  <link href="https://cdn.jsdelivr.net/npm/tailwindcss@2.2.19/dist/tailwind.min.css" rel="stylesheet"/>
 </head>
 <body class="bg-gray-100">
-    <header class="bg-gray-800 text-white py-4 text-center text-2xl font-bold">
-        Agent Assistant - {{ company.name }}
-    </header>
-    <div class="container mx-auto mt-6">
-        <div class="bg-white p-6 rounded-lg shadow-lg">
-            <div id="chat-box" class="h-64 overflow-y-auto border p-4 mb-4 rounded"></div>
-            <input id="user-input" type="text" placeholder="Type your message..." class="w-full p-2 border rounded focus:outline-none focus:ring-2 focus:ring-blue-500 transition">
-            <button onclick="sendMessage()" class="mt-2 w-full bg-blue-500 text-white py-2 rounded hover:bg-blue-600 transition duration-200">Send</button>
-        </div>
-    </div>
-    <script>
-        async function sendMessage() {
-            const input = document.getElementById('user-input');
-            const message = input.value;
-            if (!message) return;
-            appendMessage('You', message);
-            input.value = '';
-            const res = await fetch('{{ url_for("agent_api") }}', {
-                method: 'POST',
-                headers: { 'Content-Type': 'application/json' },
-                body: JSON.stringify({ message })
-            });
-            const data = await res.json();
-            appendMessage('AI', data.answer);
-        }
+  <header class="bg-gray-800 text-white py-4 text-center text-2xl font-bold">
+    Agent Assistant - {{ company.name }}
+  </header>
 
-        function appendMessage(sender, message) {
-            const box = document.getElementById('chat-box');
-            const msg = document.createElement('div');
-            msg.classList.add('mb-2');
-            msg.innerHTML = `<strong>${sender}:</strong> ${message}`;
-            box.appendChild(msg);
-            box.scrollTop = box.scrollHeight;
-        }
-    </script>
+  <div class="container mx-auto mt-6">
+    <div class="bg-white p-6 rounded-lg shadow-lg">
+      <div id="chat-box" class="h-64 overflow-y-auto border p-4 mb-4 rounded"></div>
+      <input id="user-input" type="text" placeholder="Type your message..." class="w-full p-2 border rounded focus:outline-none focus:ring-2 focus:ring-blue-500 transition" />
+      <button onclick="sendMessage()" class="mt-2 w-full bg-blue-500 text-white py-2 rounded hover:bg-blue-600 transition duration-200">Send</button>
+    </div>
+  </div>
+
+  <script>
+    async function sendMessage() {
+      const input = document.getElementById('user-input');
+      const message = input.value.trim();
+      if (!message) return;
+
+      appendMessage('You', escapeHtml(message));
+      input.value = '';
+
+      const res = await fetch(`{{ url_for("agent_api") }}?company_id={{ company.id }}`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ message })
+      });
+      const data = await res.json();
+      appendMessage('AI', nl2br(escapeHtml(data.answer || '')));
+    }
+
+    function appendMessage(sender, message) {
+      const box = document.getElementById('chat-box');
+      const msg = document.createElement('div');
+      msg.classList.add('mb-2');
+      msg.innerHTML = `<strong>${sender}:</strong> ${message}`;
+      box.appendChild(msg);
+      box.scrollTop = box.scrollHeight;
+    }
+
+    function nl2br(text) { return text.replace(/\n/g, '<br>'); }
+    function escapeHtml(unsafe) {
+      return unsafe
+        .replaceAll('&', '&amp;')
+        .replaceAll('<', '&lt;')
+        .replaceAll('>', '&gt;')
+        .replaceAll('"', '&quot;')
+        .replaceAll("'", '&#039;');
+    }
+  </script>
 </body>
 </html>

@@ -30,9 +30,21 @@ def create_app():
     app.secret_key = os.environ.get("SECRET_KEY", "supersecretkey")
 
     # Database URL (Render: set in Dashboard -> Environment)
-    db_url = os.environ.get("DATABASE_URL", "sqlite:///l1_jarvis.db")
+    raw_url = os.environ.get("DATABASE_URL", "sqlite:///l1_jarvis.db")
+
+    # Normalize Postgres URIs for SQLAlchemy + psycopg2 and require SSL on Render
+    db_url = raw_url
+    if db_url.startswith("postgres://"):
+        db_url = db_url.replace("postgres://", "postgresql://", 1)
+    if db_url.startswith("postgresql://") and "+psycopg2" not in db_url:
+        db_url = db_url.replace("postgresql://", "postgresql+psycopg2://", 1)
+
     app.config["SQLALCHEMY_DATABASE_URI"] = db_url
     app.config["SQLALCHEMY_TRACK_MODIFICATIONS"] = False
+
+    # Force SSL for Postgres on managed hosts (Render)
+    if db_url.startswith("postgresql+psycopg2://"):
+        app.config["SQLALCHEMY_ENGINE_OPTIONS"] = {"connect_args": {"sslmode": "require"}}
 
     # Uploads folder (defaults to /tmp/uploads for cloud)
     upload_folder = os.environ.get("UPLOAD_PATH", "/tmp/uploads")
@@ -44,7 +56,7 @@ def create_app():
 
     # Logging
     logging.basicConfig(level=logging.INFO)
-    app.logger.info(f"DATABASE_URL: {db_url}")
+    app.logger.info(f"DATABASE_URL (normalized): {db_url}")
     app.logger.info(f"UPLOAD_FOLDER: {upload_folder}")
 
     return app
@@ -92,7 +104,7 @@ def check_database():
         app.logger.info("Database connection successful")
     except Exception as e:
         app.logger.error(f"Database connection failed: {e}")
-        raise RuntimeError("Cannot connect to the database. Check DATABASE_URL.")
+        raise RuntimeError("Cannot connect to the database. Check DATABASE_URL / SSL / perms.")
 
 
 def create_default_admin():
@@ -129,7 +141,6 @@ def not_found(_):
 
 @app.errorhandler(500)
 def server_error(_):
-    # Keep it simple and safe for UI; details are in logs
     flash("An unexpected error occurred. Please try again.", "error")
     return render_template("login.html"), 500
 
@@ -284,45 +295,45 @@ def agent_api():
     try:
         data = request.get_json(silent=True) or {}
         user_message = (data.get("message") or "").strip()
+        company_id = int(request.args.get("company_id", "0") or 0)
         if not user_message:
-            return jsonify({"answer": "No input received", "script": ""})
+            return jsonify({"answer": "No input received"})
 
         client = get_openai_client()
 
-        # You can enrich with company context if you want:
-        # e.g., pass company_id and query CompanyData for relevant snippets.
+        # Minimal company context: list items (filenames/URLs) to steer the model
+        context = ""
+        if company_id:
+            items = CompanyData.query.filter_by(company_id=company_id)\
+                                     .order_by(CompanyData.created_at.desc())\
+                                     .limit(20).all()
+            if items:
+                context = "Company knowledge items:\n" + "\n".join(f"- {it.name_or_url}" for it in items)
 
         system_prompt = (
-            "You are an AI call center assistant. "
-            "Answer clearly for the agent and also provide a short, professional phone script "
-            "following the word 'Script:' on its own line."
+            "You are a helpful AI assistant for call center agents. "
+            "Answer clearly and concisely based on the provided company knowledge (if any) and the question. "
+            "If the answer is not in the provided knowledge, say you don't know."
         )
+
+        user_content = (f"{context}\n\nQuestion:\n{user_message}" if context else user_message)
 
         resp = client.chat.completions.create(
             model="gpt-4o-mini",
             messages=[
                 {"role": "system", "content": system_prompt},
-                {"role": "user", "content": user_message},
+                {"role": "user", "content": user_content},
             ],
             max_tokens=500,
             temperature=0.3,
         )
 
         text_out = resp.choices[0].message.content.strip()
-
-        # Split on "Script:" if present
-        answer, script = text_out, ""
-        splitter = "\nScript:"
-        if splitter in text_out:
-            parts = text_out.split(splitter, 1)
-            answer = parts[0].strip()
-            script = parts[1].strip()
-
-        return jsonify({"answer": answer, "script": script})
+        return jsonify({"answer": text_out})
 
     except Exception as e:
         app.logger.error(f"Agent API error: {e}")
-        return jsonify({"answer": f"Error: {str(e)}", "script": ""}), 500
+        return jsonify({"answer": f"Error: {str(e)}"}), 500
 
 
 @app.route("/health")
