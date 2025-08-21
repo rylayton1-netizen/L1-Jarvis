@@ -77,7 +77,7 @@
                   {{ item.created_at }}
                 </div>
                 {% if item.content %}
-                  <div class="text-sm text-gray-600 mt-1 line-clamp-2" style="-webkit-line-clamp:2;display:-webkit-box;-webkit-box-orient:vertical;overflow:hidden;">
+                  <div class="text-sm text-gray-600 mt-1 line-clamp-2" style="line-clamp:2;-webkit-line-clamp:2;display:-webkit-box;-webkit-box-orient:vertical;overflow:hidden;">
                     {{ (item.content[:180] ~ ('…' if item.content|length > 180 else '')) }}
                   </div>
                 {% else %}
