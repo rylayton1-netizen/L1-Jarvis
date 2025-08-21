@@ -384,6 +384,40 @@ def reingest(company_id: int):
     return redirect(url_for("manage", company_id=company_id))
 
 
+@app.route("/delete_entry/<int:entry_id>", methods=["GET"])
+def delete_entry(entry_id: int):
+    # must be logged in
+    if "user_id" not in session:
+        return redirect(url_for("login"))
+
+    try:
+        entry = CompanyData.query.get_or_404(entry_id)
+        company_id = entry.company_id  # remember before deleting
+
+        # delete the uploaded file from disk if present
+        if entry.filename:
+            try:
+                path = os.path.join(app.config["UPLOAD_FOLDER"], entry.filename)
+                if os.path.exists(path):
+                    os.remove(path)
+            except (FileNotFoundError, PermissionError):
+                pass
+
+        # delete the DB row
+        db.session.delete(entry)
+        db.session.commit()
+        flash("Entry deleted", "success")
+
+        # go back to the company's manage page
+        return redirect(url_for("manage", company_id=company_id))
+
+    except Exception as e:
+        app.logger.error(f"Delete entry error: {e}")
+        flash("Failed to delete entry.", "error")
+        # if something goes wrong, fall back to dashboard
+        return redirect(url_for("dashboard"))
+
+
 @app.route("/agent/<int:company_id>")
 def agent(company_id: int):
     if "user_id" not in session:
@@ -471,3 +505,5 @@ with app.app_context():
 if __name__ == "__main__":
     # On Render, use: gunicorn app:app
     app.run(host="0.0.0.0", port=int(os.environ.get("PORT", 5000)), debug=True)
+
+
