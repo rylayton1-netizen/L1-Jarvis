@@ -5,64 +5,31 @@
   <meta name="viewport" content="width=device-width, initial-scale=1.0"/>
   <title>{{ company.name }} — Agent Assistant</title>
   <link href="https://cdn.jsdelivr.net/npm/tailwindcss@2.2.19/dist/tailwind.min.css" rel="stylesheet"/>
-
   <style>
-    /* typing dots animation */
-    .typing {
-      display: inline-flex;
-      gap: 6px;
-      align-items: center;
-    }
-    .typing .dot {
-      width: 6px; height: 6px; border-radius: 9999px; background: #9CA3AF;
-      animation: blink 1.2s infinite;
-    }
-    .typing .dot:nth-child(2) { animation-delay: .2s; }
-    .typing .dot:nth-child(3) { animation-delay: .4s; }
-    @keyframes blink {
-      0%, 80%, 100% { opacity: .2; transform: translateY(0); }
-      40% { opacity: 1; transform: translateY(-2px); }
-    }
-    /* nice scrollbar */
-    #chat-box::-webkit-scrollbar { width: 8px; }
-    #chat-box::-webkit-scrollbar-thumb { background: #E5E7EB; border-radius: 9999px; }
-    #chat-box:hover::-webkit-scrollbar-thumb { background: #D1D5DB; }
+    .typing { display:inline-flex; gap:6px; align-items:center; }
+    .typing .dot { width:6px;height:6px;border-radius:9999px;background:#9CA3AF;animation:blink 1.2s infinite; }
+    .typing .dot:nth-child(2){ animation-delay:.2s; }
+    .typing .dot:nth-child(3){ animation-delay:.4s; }
+    @keyframes blink{0%,80%,100%{opacity:.2;transform:translateY(0)}40%{opacity:1;transform:translateY(-2px)}}
+    #chat-box::-webkit-scrollbar { width: 8px; } #chat-box::-webkit-scrollbar-thumb { background:#E5E7EB;border-radius:9999px } #chat-box:hover::-webkit-scrollbar-thumb{background:#D1D5DB}
   </style>
 </head>
-
 <body class="bg-gray-100">
   <main class="flex flex-col h-screen">
-    <!-- Header -->
-    <header class="bg-white border-b px-4 md:px-6 py-3 flex items-center justify-between">
+    <header class="bg-white border-b px-4 md:px-6 py-3 flex items-center">
       <div class="flex items-center space-x-3">
         <div class="w-8 h-8 rounded-xl bg-gray-900 text-white flex items-center justify-center font-bold">L1</div>
         <h1 class="text-lg md:text-xl font-semibold text-gray-900">{{ company.name }}</h1>
       </div>
-      <a href="{{ url_for('dashboard') }}" class="text-sm text-gray-500 hover:text-gray-700">Dashboard</a>
     </header>
 
-    <!-- Chat area -->
-    <section id="chat-box" class="flex-1 overflow-y-auto px-3 md:px-6 py-4 md:py-6 space-y-4">
-      <!-- Messages will be appended here -->
-    </section>
+    <section id="chat-box" class="flex-1 overflow-y-auto px-3 md:px-6 py-4 md:py-6 space-y-4"></section>
 
-    <!-- Input bar (sticky at bottom) -->
     <footer class="sticky bottom-0 w-full bg-gradient-to-t from-gray-100 to-gray-100/70 pt-2 pb-4 px-3 md:px-6">
       <div class="max-w-5xl mx-auto">
         <div class="bg-white border rounded-2xl shadow-sm flex items-end p-2">
-          <textarea
-            id="user-input"
-            rows="1"
-            placeholder="Message…"
-            class="flex-1 resize-none outline-none px-3 py-2 rounded-xl placeholder-gray-400 text-gray-900"
-            style="max-height: 180px; overflow-y: auto;"
-          ></textarea>
-
-          <button id="send-btn"
-            class="ml-2 px-4 py-2 bg-gray-900 text-white rounded-xl hover:bg-gray-800 transition"
-            title="Send (Enter)">
-            Send
-          </button>
+          <textarea id="user-input" rows="1" placeholder="Message…" class="flex-1 resize-none outline-none px-3 py-2 rounded-xl placeholder-gray-400 text-gray-900" style="max-height: 180px; overflow-y: auto;"></textarea>
+          <button id="send-btn" class="ml-2 px-4 py-2 bg-gray-900 text-white rounded-xl hover:bg-gray-800 transition" title="Send (Enter)">Send</button>
         </div>
         <p class="text-xs text-gray-400 mt-2">Press Enter to send • Shift + Enter for a new line</p>
       </div>
@@ -70,125 +37,51 @@
   </main>
 
   <script>
-    const chatBox   = document.getElementById('chat-box');
-    const inputEl   = document.getElementById('user-input');
-    const sendBtn   = document.getElementById('send-btn');
-    let  isSending  = false;
+    const chatBox = document.getElementById('chat-box');
+    const inputEl = document.getElementById('user-input');
+    const sendBtn = document.getElementById('send-btn');
+    let isSending = false;
 
-    // --- helpers ---
-    function nl2br(text) { return (text || '').replace(/\n/g, '<br>'); }
-    function escapeHtml(s) {
-      return (s || '')
-        .replaceAll('&', '&amp;')
-        .replaceAll('<', '&lt;')
-        .replaceAll('>', '&gt;')
-        .replaceAll('"', '&quot;')
-        .replaceAll("'", '&#039;');
+    function nl2br(t){return (t||'').replace(/\n/g,'<br>')}
+    function escapeHtml(s){return (s||'').replaceAll('&','&amp;').replaceAll('<','&lt;').replaceAll('>','&gt;').replaceAll('"','&quot;').replaceAll("'","&#039;")}
+    function scrollToBottom(){chatBox.scrollTop=chatBox.scrollHeight}
+    function autoResize(){inputEl.style.height='auto';inputEl.style.height=Math.min(inputEl.scrollHeight,180)+'px'}
+
+    function appendBubble(htmlSafeText, role){
+      const wrap=document.createElement('div');
+      wrap.className=(role==='user')?'flex justify-end':'flex justify-start';
+      const bubble=document.createElement('div');
+      bubble.className=(role==='user')?'max-w-3xl bg-gray-900 text-white px-4 py-3 rounded-2xl rounded-tr-md shadow'
+                                       :'max-w-3xl bg-white text-gray-900 px-4 py-3 rounded-2xl rounded-tl-md shadow border';
+      bubble.innerHTML=htmlSafeText; wrap.appendChild(bubble); chatBox.appendChild(wrap); scrollToBottom(); return bubble;
+    }
+    function appendThinking(){
+      const wrap=document.createElement('div'); wrap.className='flex justify-start';
+      const bubble=document.createElement('div'); bubble.className='max-w-3xl bg-white text-gray-900 px-4 py-3 rounded-2xl rounded-tl-md shadow border';
+      bubble.innerHTML=`<div class="typing"><span class="dot"></span><span class="dot"></span><span class="dot"></span></div>`;
+      wrap.appendChild(bubble); chatBox.appendChild(wrap); scrollToBottom(); return bubble;
     }
 
-    function scrollToBottom() {
-      chatBox.scrollTop = chatBox.scrollHeight;
-    }
-
-    function autoResize() {
-      inputEl.style.height = 'auto';
-      inputEl.style.height = Math.min(inputEl.scrollHeight, 180) + 'px';
-    }
-
-    // Bubble builders: role = 'user' | 'ai'
-    function appendBubble(htmlSafeText, role) {
-      const wrap = document.createElement('div');
-      wrap.className = (role === 'user')
-        ? 'flex justify-end'
-        : 'flex justify-start';
-
-      const bubble = document.createElement('div');
-      bubble.className = (role === 'user')
-        ? 'max-w-3xl bg-gray-900 text-white px-4 py-3 rounded-2xl rounded-tr-md shadow'
-        : 'max-w-3xl bg-white text-gray-900 px-4 py-3 rounded-2xl rounded-tl-md shadow border';
-      bubble.innerHTML = htmlSafeText;
-      wrap.appendChild(bubble);
-      chatBox.appendChild(wrap);
-      scrollToBottom();
-      return bubble;
-    }
-
-    // "Thinking…" placeholder on the left (AI side). Returns the bubble DOM node to update later.
-    function appendThinking() {
-      const wrap = document.createElement('div');
-      wrap.className = 'flex justify-start';
-
-      const bubble = document.createElement('div');
-      bubble.className = 'max-w-3xl bg-white text-gray-900 px-4 py-3 rounded-2xl rounded-tl-md shadow border';
-      bubble.innerHTML = `
-        <div class="typing">
-          <span class="dot"></span><span class="dot"></span><span class="dot"></span>
-        </div>
-      `;
-      wrap.appendChild(bubble);
-      chatBox.appendChild(wrap);
-      scrollToBottom();
-      return bubble;
-    }
-
-    // --- send logic ---
-    async function sendMessage() {
-      const raw = inputEl.value;
-      const message = raw.trim();
-      if (!message || isSending) return;
-
-      // render user bubble on the right (no "You:" label)
-      appendBubble(nl2br(escapeHtml(message)), 'user');
-
-      // clear & disable input while sending
-      inputEl.value = '';
-      autoResize();
-      inputEl.disabled = true;
-      sendBtn.disabled = true;
-      isSending = true;
-
-      // thinking bubble (AI side)
-      const thinkingBubble = appendThinking();
-
-      try {
-        const res = await fetch(`{{ url_for("agent_api") }}?company_id={{ company.id }}`, {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ message })
-        });
-
-        const data = await res.json();
-
-        // replace thinking bubble with actual AI response
-        thinkingBubble.innerHTML = nl2br(escapeHtml(data.answer || ''));
-      } catch (e) {
-        thinkingBubble.innerHTML = '<span class="text-red-600">Sorry, something went wrong.</span>';
-      } finally {
-        inputEl.disabled = false;
-        sendBtn.disabled = false;
-        inputEl.focus();
-        isSending = false;
-        scrollToBottom();
+    async function sendMessage(){
+      const raw=inputEl.value; const message=raw.trim(); if(!message||isSending) return;
+      appendBubble(nl2br(escapeHtml(message)),'user');
+      inputEl.value=''; autoResize(); inputEl.disabled=true; sendBtn.disabled=true; isSending=true;
+      const thinkingBubble=appendThinking();
+      try{
+        const res=await fetch(`{{ url_for("agent_api") }}?company_id={{ company.id }}`,{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({message})});
+        const data=await res.json();
+        thinkingBubble.innerHTML=nl2br(escapeHtml(data.answer||''));
+      }catch(e){
+        thinkingBubble.innerHTML='<span class="text-red-600">Sorry, something went wrong.</span>';
+      }finally{
+        inputEl.disabled=false; sendBtn.disabled=false; inputEl.focus(); isSending=false; scrollToBottom();
       }
     }
 
-    // --- events ---
     sendBtn.addEventListener('click', sendMessage);
-
-    inputEl.addEventListener('keydown', (e) => {
-      if (e.key === 'Enter' && !e.shiftKey) {
-        e.preventDefault();
-        sendMessage();
-      }
-    });
-
+    inputEl.addEventListener('keydown', e=>{ if(e.key==='Enter'&&!e.shiftKey){e.preventDefault();sendMessage()} });
     inputEl.addEventListener('input', autoResize);
-
-    // focus and size on load
-    window.addEventListener('load', () => {
-      inputEl.focus();
-      autoResize();
-    });
+    window.addEventListener('load', ()=>{ inputEl.focus(); autoResize(); });
   </script>
 </body>
 </html>

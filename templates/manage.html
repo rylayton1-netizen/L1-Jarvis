@@ -1,24 +1,28 @@
 <!DOCTYPE html>
 <html lang="en">
 <head>
-  <meta charset="UTF-8" />
+  <meta charset="UTF-8"/>
   <meta name="viewport" content="width=device-width, initial-scale=1.0"/>
-  <title>Manage Company — {{ company.name }}</title>
+  <title>Manage — {{ company.name }}</title>
   <link href="https://cdn.jsdelivr.net/npm/tailwindcss@2.2.19/dist/tailwind.min.css" rel="stylesheet"/>
 </head>
 <body class="bg-gray-100">
-  <header class="bg-white border-b px-4 py-3 flex items-center justify-between">
+  <!-- Header -->
+  <header class="bg-white border-b px-4 md:px-6 py-3 flex items-center justify-between">
     <div class="flex items-center space-x-3">
       <div class="w-8 h-8 rounded-xl bg-gray-900 text-white flex items-center justify-center font-bold">L1</div>
-      <h1 class="text-lg font-semibold text-gray-900">Manage — {{ company.name }}</h1>
+      <h1 class="text-lg md:text-xl font-semibold text-gray-900">Manage — {{ company.name }}</h1>
     </div>
     <nav class="space-x-3">
       <a class="text-sm text-gray-600 hover:text-gray-800" href="{{ url_for('dashboard') }}">Dashboard</a>
-      <a class="text-sm text-blue-600 hover:underline" href="{{ url_for('agent', company_id=company.id) }}">Open Agent</a>
+      <a class="text-sm text-green-700 hover:underline"
+         href="{{ url_for('agent', company_id=company.id) }}"
+         target="_blank" rel="noopener">Open Agent</a>
     </nav>
   </header>
 
-  <main class="max-w-4xl mx-auto px-4 py-6">
+  <main class="max-w-5xl mx-auto px-4 md:px-6 py-6">
+    <!-- Flash messages -->
     {% with messages = get_flashed_messages(with_categories=true) %}
       {% if messages %}
         <div class="space-y-2 mb-4">
@@ -34,11 +38,12 @@
       {% endif %}
     {% endwith %}
 
+    <!-- Ingestion form -->
     <section class="bg-white p-4 rounded-xl shadow mb-6">
       <h2 class="font-semibold text-gray-900 mb-3">Add data</h2>
       <form class="space-y-3" method="POST" enctype="multipart/form-data" action="{{ url_for('manage', company_id=company.id) }}">
         <div>
-          <label class="block text-sm text-gray-600 mb-1">Upload file (pdf/txt/csv)</label>
+          <label class="block text-sm text-gray-600 mb-1">Upload file (PDF/TXT/CSV)</label>
           <input class="w-full border rounded p-2" type="file" name="file" />
         </div>
         <div>
@@ -47,28 +52,47 @@
         </div>
         <div class="flex items-center gap-2">
           <button class="bg-gray-900 text-white px-4 py-2 rounded hover:bg-gray-800" type="submit">Submit</button>
-          <a class="text-sm text-blue-600 hover:underline" href="{{ url_for('reingest', company_id=company.id) }}">Re-ingest all</a>
+          <a class="text-sm text-blue-600 hover:underline"
+             href="{{ url_for('reingest', company_id=company.id) }}">Re-ingest all</a>
         </div>
       </form>
     </section>
 
+    <!-- Existing data list -->
     <section class="bg-white p-4 rounded-xl shadow">
-      <h2 class="font-semibold text-gray-900 mb-3">Company data</h2>
+      <div class="flex items-center justify-between mb-3">
+        <h2 class="font-semibold text-gray-900">Company data</h2>
+        <span class="text-xs text-gray-500">{{ data|length }} item{{ '' if (data|length == 1) else 's' }}</span>
+      </div>
+
       {% if data %}
         <ul class="divide-y">
           {% for item in data %}
-            <li class="py-2 flex items-center justify-between">
-              <div class="truncate">
-                <div class="text-gray-900 truncate">{{ item.name_or_url or item.filename }}</div>
-                <div class="text-xs text-gray-500">{{ item.created_at }}</div>
+            <li class="py-3 flex flex-col sm:flex-row sm:items-center sm:justify-between gap-2">
+              <div class="min-w-0">
+                <div class="text-gray-900 font-medium truncate">
+                  {{ item.name_or_url or item.filename }}
+                </div>
+                <div class="text-xs text-gray-500">
+                  {{ item.created_at }}
+                </div>
+                {% if item.content %}
+                  <div class="text-sm text-gray-600 mt-1 line-clamp-2" style="-webkit-line-clamp:2;display:-webkit-box;-webkit-box-orient:vertical;overflow:hidden;">
+                    {{ (item.content[:180] ~ ('…' if item.content|length > 180 else '')) }}
+                  </div>
+                {% else %}
+                  <div class="text-xs text-yellow-700 mt-1">Not ingested yet (will ingest automatically on next question or via Re-ingest)</div>
+                {% endif %}
               </div>
-              <a class="text-sm text-red-600 hover:underline"
-                 href="{{ url_for('delete_entry', entry_id=item.id) }}">Delete</a>
+              <div class="flex items-center gap-3">
+                <a class="text-sm text-red-600 hover:underline"
+                   href="{{ url_for('delete_entry', entry_id=item.id) }}">Delete</a>
+              </div>
             </li>
           {% endfor %}
         </ul>
       {% else %}
-        <p class="text-sm text-gray-500">No data yet.</p>
+        <p class="text-sm text-gray-500">No data yet. Upload a file or add a URL above.</p>
       {% endif %}
     </section>
   </main>

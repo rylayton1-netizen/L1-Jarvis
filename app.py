@@ -35,7 +35,7 @@ def create_app():
     # Secret key
     app.secret_key = os.environ.get("SECRET_KEY", "supersecretkey")
 
-    # Database URL (Render: set in Dashboard -> Environment)
+    # Database URL
     raw_url = os.environ.get("DATABASE_URL", "sqlite:///l1_jarvis.db")
 
     # Normalize Postgres URIs for SQLAlchemy + psycopg2 and require SSL on Render
@@ -48,11 +48,11 @@ def create_app():
     app.config["SQLALCHEMY_DATABASE_URI"] = db_url
     app.config["SQLALCHEMY_TRACK_MODIFICATIONS"] = False
 
-    # Force SSL for Postgres on managed hosts (Render)
+    # Force SSL for managed Postgres
     if db_url.startswith("postgresql+psycopg2://"):
         app.config["SQLALCHEMY_ENGINE_OPTIONS"] = {"connect_args": {"sslmode": "require"}}
 
-    # Uploads folder (defaults to /tmp/uploads for cloud)
+    # Uploads folder (prefer /tmp/uploads on Render)
     upload_folder = os.environ.get("UPLOAD_PATH", "/tmp/uploads")
     os.makedirs(upload_folder, exist_ok=True)
     app.config["UPLOAD_FOLDER"] = upload_folder
@@ -67,7 +67,6 @@ def create_app():
 
     return app
 
-
 app = create_app()
 db = SQLAlchemy(app)
 
@@ -80,28 +79,24 @@ class User(db.Model):
     password_hash = db.Column(db.String(255), nullable=False)
     created_at = db.Column(db.DateTime, default=datetime.utcnow)
 
-
 class Company(db.Model):
     id = db.Column(db.Integer, primary_key=True)
     name = db.Column(db.String(150), unique=True, nullable=False)
     created_at = db.Column(db.DateTime, default=datetime.utcnow)
-
 
 class CompanyData(db.Model):
     id = db.Column(db.Integer, primary_key=True)
     company_id = db.Column(db.Integer, db.ForeignKey("company.id"), nullable=False)
     name_or_url = db.Column(db.String(255))  # filename or URL
     filename = db.Column(db.String(255))     # if a file was uploaded
-    content = db.Column(db.Text)             # extracted text (PDF/URL)
+    content = db.Column(db.Text)             # extracted text
     created_at = db.Column(db.DateTime, default=datetime.utcnow)
 
-
 # -----------------------------
-# Helpers (files, web, ingest, ranking)
+# Helpers
 # -----------------------------
 def allowed_file(filename: str) -> bool:
     return "." in filename and filename.rsplit(".", 1)[1].lower() in app.config["ALLOWED_EXTENSIONS"]
-
 
 def check_database():
     try:
@@ -110,34 +105,27 @@ def check_database():
         app.logger.info("Database connection successful")
     except Exception as e:
         app.logger.error(f"Database connection failed: {e}")
-        raise RuntimeError("Cannot connect to the database. Check DATABASE_URL / SSL / user perms.")
-
+        raise RuntimeError("Cannot connect to DB. Check DATABASE_URL / SSL / perms.")
 
 def create_default_admin():
     try:
         if User.query.count() == 0:
-            admin = User(
-                username="admin",
-                password_hash=generate_password_hash("admin123"),
-            )
+            admin = User(username="admin", password_hash=generate_password_hash("admin123"))
             db.session.add(admin)
             db.session.commit()
-            app.logger.info("Default admin created: username='admin', password='admin123'")
+            app.logger.info("Default admin created: admin / admin123")
     except Exception as e:
         app.logger.error(f"Failed creating default admin: {e}")
         raise
 
-
 def get_openai_client() -> OpenAI:
     key = os.environ.get("OPENAI_API_KEY")
     if not key:
-        app.logger.warning("OPENAI_API_KEY is not set. AI responses will fail.")
+        app.logger.warning("OPENAI_API_KEY is not set.")
     return OpenAI(api_key=key)
-
 
 def _condense_ws(text: str) -> str:
     return re.sub(r"\s+", " ", text or "").strip()
-
 
 def extract_text_from_pdf(path: str, max_chars: int = 20000) -> str:
     try:
@@ -157,7 +145,6 @@ def extract_text_from_pdf(path: str, max_chars: int = 20000) -> str:
         app.logger.error(f"PDF extract failed for {path}: {e}")
         return ""
 
-
 def fetch_url_text(url: str, max_chars: int = 20000) -> str:
     try:
         headers = {"User-Agent": "Mozilla/5.0 (compatible; L1Agent/1.0)"}
@@ -171,7 +158,6 @@ def fetch_url_text(url: str, max_chars: int = 20000) -> str:
     except Exception as e:
         app.logger.error(f"URL fetch failed for {url}: {e}")
         return ""
-
 
 def ingest_entry(entry: CompanyData):
     """Extract text from a file or URL and store in entry.content."""
@@ -201,12 +187,12 @@ def ingest_entry(entry: CompanyData):
         else:
             app.logger.info(f"Unsupported file extension for ingestion: {ext}")
     else:
+        # treat as URL if it looks like one
         if entry.name_or_url and entry.name_or_url.lower().startswith(("http://", "https://")):
             text = fetch_url_text(entry.name_or_url)
 
     entry.content = text
     db.session.add(entry)
-
 
 def simple_rank(items: List[CompanyData], query: str, k: int = 5) -> List[CompanyData]:
     """Basic keyword scoring to pick the most relevant entries."""
@@ -223,14 +209,12 @@ def simple_rank(items: List[CompanyData], query: str, k: int = 5) -> List[Compan
         score = 0
         for t in terms:
             score += text_low.count(t) * 5
-        # small bonus if many unique terms appear
         score += len({t for t in terms if t in text_low})
         if score > 0:
             ranked.append((score, it))
 
     ranked.sort(key=lambda x: x[0], reverse=True)
     return [it for _, it in ranked[:k]]
-
 
 def snippet(text: str, query: str, window: int = 180) -> str:
     """Return a focused excerpt around the first matched term."""
@@ -246,20 +230,17 @@ def snippet(text: str, query: str, window: int = 180) -> str:
             return _condense_ws(text[start:end])
     return _condense_ws(text[: 2 * window])
 
-
 # -----------------------------
-# Error Handlers
+# Errors
 # -----------------------------
 @app.errorhandler(404)
 def not_found(_):
     return render_template("login.html"), 404
 
-
 @app.errorhandler(500)
 def server_error(_):
     flash("An unexpected error occurred. Please try again.", "error")
     return render_template("login.html"), 500
-
 
 # -----------------------------
 # Routes
@@ -284,18 +265,15 @@ def login():
         flash("Login failed. Check logs.", "error")
         return render_template("login.html"), 500
 
-
 @app.route("/logout")
 def logout():
     session.pop("user_id", None)
     return redirect(url_for("login"))
 
-
 @app.route("/dashboard", methods=["GET", "POST"])
 def dashboard():
     if "user_id" not in session:
         return redirect(url_for("login"))
-
     try:
         if request.method == "POST":
             company_name = request.form.get("company_name", "").strip()
@@ -312,7 +290,6 @@ def dashboard():
         flash("Failed to load dashboard.", "error")
         return render_template("dashboard.html", companies=[]), 500
 
-
 @app.route("/delete_company/<int:company_id>")
 def delete_company(company_id: int):
     if "user_id" not in session:
@@ -328,12 +305,10 @@ def delete_company(company_id: int):
         flash("Failed to delete company.", "error")
     return redirect(url_for("dashboard"))
 
-
 @app.route("/manage/<int:company_id>", methods=["GET", "POST"])
 def manage(company_id: int):
     if "user_id" not in session:
         return redirect(url_for("login"))
-
     try:
         company = Company.query.get_or_404(company_id)
 
@@ -358,19 +333,15 @@ def manage(company_id: int):
 
         data = CompanyData.query.filter_by(company_id=company.id).order_by(CompanyData.created_at.desc()).all()
         return render_template("manage.html", company=company, data=data)
-
     except Exception as e:
         app.logger.error(f"Manage error: {e}")
         flash("Failed to manage company.", "error")
         return redirect(url_for("dashboard"))
 
-
 @app.route("/reingest/<int:company_id>")
 def reingest(company_id: int):
-    """Re-extract text for all entries (useful if you added the content column later)."""
     if "user_id" not in session:
         return redirect(url_for("login"))
-
     try:
         company = Company.query.get_or_404(company_id)
         items = CompanyData.query.filter_by(company_id=company.id).all()
@@ -383,18 +354,13 @@ def reingest(company_id: int):
         flash("Failed to re-ingest.", "error")
     return redirect(url_for("manage", company_id=company_id))
 
-
 @app.route("/delete_entry/<int:entry_id>", methods=["GET"])
 def delete_entry(entry_id: int):
-    # must be logged in
     if "user_id" not in session:
         return redirect(url_for("login"))
-
     try:
         entry = CompanyData.query.get_or_404(entry_id)
-        company_id = entry.company_id  # remember before deleting
-
-        # delete the uploaded file from disk if present
+        company_id = entry.company_id
         if entry.filename:
             try:
                 path = os.path.join(app.config["UPLOAD_FOLDER"], entry.filename)
@@ -402,21 +368,14 @@ def delete_entry(entry_id: int):
                     os.remove(path)
             except (FileNotFoundError, PermissionError):
                 pass
-
-        # delete the DB row
         db.session.delete(entry)
         db.session.commit()
         flash("Entry deleted", "success")
-
-        # go back to the company's manage page
         return redirect(url_for("manage", company_id=company_id))
-
     except Exception as e:
         app.logger.error(f"Delete entry error: {e}")
         flash("Failed to delete entry.", "error")
-        # if something goes wrong, fall back to dashboard
         return redirect(url_for("dashboard"))
-
 
 @app.route("/agent/<int:company_id>")
 def agent(company_id: int):
@@ -430,12 +389,10 @@ def agent(company_id: int):
         flash("Failed to load agent page.", "error")
         return redirect(url_for("dashboard"))
 
-
 @app.route("/agent_api", methods=["POST"])
 def agent_api():
     if "user_id" not in session:
         return jsonify({"error": "Unauthorized"}), 401
-
     try:
         data = request.get_json(silent=True) or {}
         user_message = (data.get("message") or "").strip()
@@ -445,10 +402,23 @@ def agent_api():
 
         client = get_openai_client()
 
-        # Collect and rank company content
         context = ""
         if company_id:
             items = CompanyData.query.filter_by(company_id=company_id).order_by(CompanyData.created_at.desc()).all()
+
+            # NEW: lazily ingest any items missing content
+            updated = False
+            for it in items:
+                if not it.content:
+                    try:
+                        ingest_entry(it)
+                        updated = True
+                    except Exception as e:
+                        app.logger.error(f"Lazy ingest failed for item {it.id}: {e}")
+            if updated:
+                db.session.commit()
+
+            # rank and build focused snippets
             top = simple_rank(items, user_message, k=5)
             pieces = []
             for it in top:
@@ -457,9 +427,7 @@ def agent_api():
                     continue
                 title = it.name_or_url or it.filename or "Item"
                 pieces.append(f"### {title}\n{snip}")
-            context = "\n\n".join(pieces)
-            # keep context small
-            context = context[:4000]
+            context = "\n\n".join(pieces)[:4000]
 
         system_prompt = (
             "You are a helpful AI assistant for call center agents. "
@@ -467,7 +435,6 @@ def agent_api():
             "If the context does not contain the answer, say you don't know "
             "and suggest which document or page to check."
         )
-
         user_content = user_message if not context else f"Context:\n{context}\n\nQuestion:\n{user_message}"
 
         resp = client.chat.completions.create(
@@ -482,28 +449,19 @@ def agent_api():
 
         text_out = resp.choices[0].message.content.strip()
         return jsonify({"answer": text_out})
-
     except Exception as e:
         app.logger.error(f"Agent API error: {e}")
         return jsonify({"answer": f"Error: {str(e)}"}), 500
-
 
 @app.route("/health")
 def health():
     return jsonify({"status": "ok"}), 200
 
-
-# -----------------------------
-# App startup
-# -----------------------------
+# startup
 with app.app_context():
     check_database()
     db.create_all()
     create_default_admin()
 
-
 if __name__ == "__main__":
-    # On Render, use: gunicorn app:app
     app.run(host="0.0.0.0", port=int(os.environ.get("PORT", 5000)), debug=True)
-
-
