@@ -1,6 +1,8 @@
 import os
+import re
 import logging
 from datetime import datetime
+from typing import List, Tuple
 
 from flask import (
     Flask, render_template, request, redirect, url_for,
@@ -11,6 +13,10 @@ from werkzeug.security import generate_password_hash, check_password_hash
 from werkzeug.utils import secure_filename
 from sqlalchemy import text
 from dotenv import load_dotenv
+
+import requests
+from bs4 import BeautifulSoup
+from PyPDF2 import PdfReader
 
 # OpenAI SDK v1.x
 from openai import OpenAI
@@ -52,7 +58,7 @@ def create_app():
     app.config["UPLOAD_FOLDER"] = upload_folder
 
     # Allowed file extensions
-    app.config["ALLOWED_EXTENSIONS"] = {"txt", "pdf", "csv", "docx"}
+    app.config["ALLOWED_EXTENSIONS"] = {"txt", "pdf", "csv"}
 
     # Logging
     logging.basicConfig(level=logging.INFO)
@@ -84,31 +90,30 @@ class Company(db.Model):
 class CompanyData(db.Model):
     id = db.Column(db.Integer, primary_key=True)
     company_id = db.Column(db.Integer, db.ForeignKey("company.id"), nullable=False)
-    name_or_url = db.Column(db.String(255))  # stores either filename or URL label
+    name_or_url = db.Column(db.String(255))  # filename or URL
     filename = db.Column(db.String(255))     # if a file was uploaded
+    content = db.Column(db.Text)             # extracted text (PDF/URL)
     created_at = db.Column(db.DateTime, default=datetime.utcnow)
 
 
 # -----------------------------
-# Helpers
+# Helpers (files, web, ingest, ranking)
 # -----------------------------
 def allowed_file(filename: str) -> bool:
     return "." in filename and filename.rsplit(".", 1)[1].lower() in app.config["ALLOWED_EXTENSIONS"]
 
 
 def check_database():
-    """Try a simple query using the engine so we fail fast if DB is unreachable."""
     try:
         with db.engine.connect() as conn:
             conn.execute(text("SELECT 1"))
         app.logger.info("Database connection successful")
     except Exception as e:
         app.logger.error(f"Database connection failed: {e}")
-        raise RuntimeError("Cannot connect to the database. Check DATABASE_URL / SSL / perms.")
+        raise RuntimeError("Cannot connect to the database. Check DATABASE_URL / SSL / user perms.")
 
 
 def create_default_admin():
-    """Create default admin if the users table is empty."""
     try:
         if User.query.count() == 0:
             admin = User(
@@ -124,15 +129,126 @@ def create_default_admin():
 
 
 def get_openai_client() -> OpenAI:
-    """Construct an OpenAI client; logs if key is missing."""
     key = os.environ.get("OPENAI_API_KEY")
     if not key:
         app.logger.warning("OPENAI_API_KEY is not set. AI responses will fail.")
     return OpenAI(api_key=key)
 
 
+def _condense_ws(text: str) -> str:
+    return re.sub(r"\s+", " ", text or "").strip()
+
+
+def extract_text_from_pdf(path: str, max_chars: int = 20000) -> str:
+    try:
+        reader = PdfReader(path)
+        chunks = []
+        for page in reader.pages:
+            try:
+                t = page.extract_text() or ""
+            except Exception:
+                t = ""
+            if t:
+                chunks.append(t)
+            if sum(len(c) for c in chunks) > max_chars:
+                break
+        return _condense_ws(" ".join(chunks))[:max_chars]
+    except Exception as e:
+        app.logger.error(f"PDF extract failed for {path}: {e}")
+        return ""
+
+
+def fetch_url_text(url: str, max_chars: int = 20000) -> str:
+    try:
+        headers = {"User-Agent": "Mozilla/5.0 (compatible; L1Agent/1.0)"}
+        r = requests.get(url, headers=headers, timeout=15)
+        r.raise_for_status()
+        soup = BeautifulSoup(r.text, "html.parser")
+        for tag in soup(["script", "style", "noscript"]):
+            tag.decompose()
+        text = soup.get_text(separator=" ")
+        return _condense_ws(text)[:max_chars]
+    except Exception as e:
+        app.logger.error(f"URL fetch failed for {url}: {e}")
+        return ""
+
+
+def ingest_entry(entry: CompanyData):
+    """Extract text from a file or URL and store in entry.content."""
+    text = ""
+    if entry.filename:
+        path = os.path.join(app.config["UPLOAD_FOLDER"], entry.filename)
+        ext = entry.filename.rsplit(".", 1)[-1].lower()
+        if ext == "pdf":
+            text = extract_text_from_pdf(path)
+        elif ext == "txt":
+            try:
+                with open(path, "r", encoding="utf-8", errors="ignore") as f:
+                    text = _condense_ws(f.read())[:20000]
+            except Exception as e:
+                app.logger.error(f"TXT read failed for {path}: {e}")
+        elif ext == "csv":
+            try:
+                with open(path, "r", encoding="utf-8", errors="ignore") as f:
+                    lines = []
+                    for i, line in enumerate(f):
+                        lines.append(line.strip())
+                        if i > 100:
+                            break
+                    text = _condense_ws("\n".join(lines))[:20000]
+            except Exception as e:
+                app.logger.error(f"CSV read failed for {path}: {e}")
+        else:
+            app.logger.info(f"Unsupported file extension for ingestion: {ext}")
+    else:
+        if entry.name_or_url and entry.name_or_url.lower().startswith(("http://", "https://")):
+            text = fetch_url_text(entry.name_or_url)
+
+    entry.content = text
+    db.session.add(entry)
+
+
+def simple_rank(items: List[CompanyData], query: str, k: int = 5) -> List[CompanyData]:
+    """Basic keyword scoring to pick the most relevant entries."""
+    q = query.lower()
+    terms = [t for t in re.split(r"[^a-z0-9]+", q) if t]
+    if not terms:
+        return items[:k]
+
+    ranked: List[Tuple[int, CompanyData]] = []
+    for it in items:
+        if not it.content:
+            continue
+        text_low = it.content.lower()
+        score = 0
+        for t in terms:
+            score += text_low.count(t) * 5
+        # small bonus if many unique terms appear
+        score += len({t for t in terms if t in text_low})
+        if score > 0:
+            ranked.append((score, it))
+
+    ranked.sort(key=lambda x: x[0], reverse=True)
+    return [it for _, it in ranked[:k]]
+
+
+def snippet(text: str, query: str, window: int = 180) -> str:
+    """Return a focused excerpt around the first matched term."""
+    if not text:
+        return ""
+    low = text.lower()
+    terms = [t for t in re.split(r"[^a-z0-9]+", query.lower()) if t]
+    for t in terms:
+        i = low.find(t)
+        if i != -1:
+            start = max(0, i - window)
+            end = min(len(text), i + len(t) + window)
+            return _condense_ws(text[start:end])
+    return _condense_ws(text[: 2 * window])
+
+
 # -----------------------------
-# Error Handlers (simple)
+# Error Handlers
 # -----------------------------
 @app.errorhandler(404)
 def not_found(_):
@@ -201,7 +317,6 @@ def dashboard():
 def delete_company(company_id: int):
     if "user_id" not in session:
         return redirect(url_for("login"))
-
     try:
         company = Company.query.get_or_404(company_id)
         CompanyData.query.filter_by(company_id=company.id).delete()
@@ -230,16 +345,15 @@ def manage(company_id: int):
                 filename = secure_filename(file.filename)
                 save_path = os.path.join(app.config["UPLOAD_FOLDER"], filename)
                 file.save(save_path)
-
                 entry = CompanyData(company_id=company.id, filename=filename, name_or_url=filename)
-                db.session.add(entry)
+                ingest_entry(entry)
 
             if url_text:
                 entry = CompanyData(company_id=company.id, name_or_url=url_text)
-                db.session.add(entry)
+                ingest_entry(entry)
 
             db.session.commit()
-            flash("Data submitted", "success")
+            flash("Data ingested", "success")
             return redirect(url_for("manage", company_id=company.id))
 
         data = CompanyData.query.filter_by(company_id=company.id).order_by(CompanyData.created_at.desc()).all()
@@ -251,33 +365,29 @@ def manage(company_id: int):
         return redirect(url_for("dashboard"))
 
 
-@app.route("/delete_entry/<int:entry_id>")
-def delete_entry(entry_id: int):
+@app.route("/reingest/<int:company_id>")
+def reingest(company_id: int):
+    """Re-extract text for all entries (useful if you added the content column later)."""
     if "user_id" not in session:
         return redirect(url_for("login"))
 
     try:
-        entry = CompanyData.query.get_or_404(entry_id)
-        if entry.filename:
-            try:
-                os.remove(os.path.join(app.config["UPLOAD_FOLDER"], entry.filename))
-            except FileNotFoundError:
-                pass
-        db.session.delete(entry)
+        company = Company.query.get_or_404(company_id)
+        items = CompanyData.query.filter_by(company_id=company.id).all()
+        for it in items:
+            ingest_entry(it)
         db.session.commit()
-        flash("Entry deleted", "success")
+        flash("Re-ingested all items.", "success")
     except Exception as e:
-        app.logger.error(f"Delete entry error: {e}")
-        flash("Failed to delete entry.", "error")
-
-    return redirect(request.referrer or url_for("dashboard"))
+        app.logger.error(f"Reingest error: {e}")
+        flash("Failed to re-ingest.", "error")
+    return redirect(url_for("manage", company_id=company_id))
 
 
 @app.route("/agent/<int:company_id>")
 def agent(company_id: int):
     if "user_id" not in session:
         return redirect(url_for("login"))
-
     try:
         company = Company.query.get_or_404(company_id)
         return render_template("agent.html", company=company)
@@ -301,22 +411,30 @@ def agent_api():
 
         client = get_openai_client()
 
-        # Minimal company context: list items (filenames/URLs) to steer the model
+        # Collect and rank company content
         context = ""
         if company_id:
-            items = CompanyData.query.filter_by(company_id=company_id)\
-                                     .order_by(CompanyData.created_at.desc())\
-                                     .limit(20).all()
-            if items:
-                context = "Company knowledge items:\n" + "\n".join(f"- {it.name_or_url}" for it in items)
+            items = CompanyData.query.filter_by(company_id=company_id).order_by(CompanyData.created_at.desc()).all()
+            top = simple_rank(items, user_message, k=5)
+            pieces = []
+            for it in top:
+                snip = snippet(it.content or "", user_message)
+                if not snip:
+                    continue
+                title = it.name_or_url or it.filename or "Item"
+                pieces.append(f"### {title}\n{snip}")
+            context = "\n\n".join(pieces)
+            # keep context small
+            context = context[:4000]
 
         system_prompt = (
             "You are a helpful AI assistant for call center agents. "
-            "Answer clearly and concisely based on the provided company knowledge (if any) and the question. "
-            "If the answer is not in the provided knowledge, say you don't know."
+            "Answer clearly and concisely using ONLY the provided context. "
+            "If the context does not contain the answer, say you don't know "
+            "and suggest which document or page to check."
         )
 
-        user_content = (f"{context}\n\nQuestion:\n{user_message}" if context else user_message)
+        user_content = user_message if not context else f"Context:\n{context}\n\nQuestion:\n{user_message}"
 
         resp = client.chat.completions.create(
             model="gpt-4o-mini",
@@ -325,7 +443,7 @@ def agent_api():
                 {"role": "user", "content": user_content},
             ],
             max_tokens=500,
-            temperature=0.3,
+            temperature=0.2,
         )
 
         text_out = resp.choices[0].message.content.strip()
@@ -342,7 +460,7 @@ def health():
 
 
 # -----------------------------
-# App startup: check DB, create tables, default admin
+# App startup
 # -----------------------------
 with app.app_context():
     check_database()
@@ -350,9 +468,6 @@ with app.app_context():
     create_default_admin()
 
 
-# -----------------------------
-# Local dev entrypoint
-# -----------------------------
 if __name__ == "__main__":
     # On Render, use: gunicorn app:app
     app.run(host="0.0.0.0", port=int(os.environ.get("PORT", 5000)), debug=True)
