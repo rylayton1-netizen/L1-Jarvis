@@ -21,7 +21,14 @@
         <div class="w-8 h-8 rounded-xl bg-gray-900 text-white flex items-center justify-center font-bold">L1</div>
         <h1 class="text-lg md:text-xl font-semibold text-gray-900">{{ company.name }}</h1>
       </div>
-      <div class="hidden md:block text-xs px-3 py-1 border rounded-full text-gray-500">Company ID: {{ company.id }}</div>
+      <!-- Right side: Company ID + Show sources toggle -->
+      <div class="hidden md:flex items-center space-x-4">
+        <div class="text-xs px-3 py-1 border rounded-full text-gray-500">Company ID: {{ company.id }}</div>
+        <label class="flex items-center space-x-2 cursor-pointer select-none">
+          <span class="text-xs text-gray-600">Show sources</span>
+          <input id="toggle-sources" type="checkbox" class="h-4 w-4">
+        </label>
+      </div>
     </header>
 
     <section id="chat-box" class="flex-1 overflow-y-auto px-3 md:px-6 py-4 md:py-6 space-y-4"></section>
@@ -41,7 +48,10 @@
     const chatBox = document.getElementById('chat-box');
     const inputEl = document.getElementById('user-input');
     const sendBtn = document.getElementById('send-btn');
+    const toggleEl = document.getElementById('toggle-sources');
+
     let isSending = false;
+    let showSources = JSON.parse(localStorage.getItem('showSources') || 'true');
 
     function nl2br(t){return (t||'').replace(/\n/g,'<br>')}
     function escapeHtml(s){return (s||'').replaceAll('&','&amp;').replaceAll('<','&lt;').replaceAll('>','&gt;').replaceAll('"','&quot;').replaceAll("'","&#039;")}
@@ -65,6 +75,7 @@
 
     // Renders a single dropdown bar labeled "Sources (N)" with filenames & snippets inside
     function renderSourcesDropdown(bubble, sources){
+      if(!showSources) return; // <-- Toggle gate
       if(!Array.isArray(sources) || sources.length===0) return;
 
       const details=document.createElement('details');
@@ -124,7 +135,20 @@
     sendBtn.addEventListener('click', sendMessage);
     inputEl.addEventListener('keydown', e=>{ if(e.key==='Enter'&&!e.shiftKey){e.preventDefault();sendMessage()} });
     inputEl.addEventListener('input', autoResize);
-    window.addEventListener('load', ()=>{ inputEl.focus(); autoResize(); });
+
+    // Initialize toggle + textarea sizing on load
+    window.addEventListener('load', ()=>{
+      inputEl.focus(); 
+      autoResize();
+
+      if (toggleEl) {
+        toggleEl.checked = !!showSources;
+        toggleEl.addEventListener('change', () => {
+          showSources = toggleEl.checked;
+          localStorage.setItem('showSources', JSON.stringify(showSources));
+        });
+      }
+    });
   </script>
 </body>
 </html>
