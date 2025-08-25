@@ -101,6 +101,99 @@ class CompanyData(db.Model):
     created_at = db.Column(db.DateTime, default=datetime.utcnow)
 
 # -----------------------------
+# Retrieval SQL (Step 4)
+# -----------------------------
+RETRIEVAL_SQL = text("""
+WITH
+q AS (
+  SELECT plainto_tsquery('english', :q) AS tsq
+),
+k AS (
+  SELECT
+    'knowledge' AS src,
+    k.id,
+    k.filename,
+    k.source_company_data_id AS source_id,
+    k.content,
+    NULL::text AS name_or_url,
+    ts_rank_cd(cd.content_tsv, q.tsq) AS rank
+  FROM public.knowledge k
+  JOIN public.company_data cd
+    ON cd.id = k.source_company_data_id
+  CROSS JOIN q
+  WHERE k.company_id = :cid
+    AND q.tsq @@ cd.content_tsv
+),
+d AS (
+  SELECT
+    'company_data' AS src,
+    cd.id,
+    cd.filename,
+    cd.id AS source_id,
+    cd.content,
+    cd.name_or_url,
+    ts_rank_cd(cd.content_tsv, q.tsq) AS rank
+  FROM public.company_data cd
+  CROSS JOIN q
+  WHERE cd.company_id = :cid
+    AND q.tsq @@ cd.content_tsv
+),
+hits AS (
+  SELECT * FROM k
+  UNION ALL
+  SELECT * FROM d
+)
+SELECT
+  src,
+  source_id,
+  COALESCE(NULLIF(filename,''), '(no filename)') AS filename,
+  name_or_url,
+  rank,
+  SUBSTRING(content FROM GREATEST(1, POSITION(LOWER(SPLIT_PART(:q, ' ', 1)) IN LOWER(content)) - 120) FOR 280) AS snippet
+FROM hits
+ORDER BY rank DESC, source_id DESC
+LIMIT 8;
+""")
+
+def get_context_snippets(question: str, company_id: int):
+    """Run retrieval and return a list of dicts [{filename, snippet}, ...]."""
+    with db.engine.begin() as conn:
+        rows = conn.execute(RETRIEVAL_SQL, {"cid": company_id, "q": question}).fetchall()
+    results = []
+    for r in rows:
+        results.append({
+            "filename": r.filename,
+            "snippet": (r.snippet or "").strip()
+        })
+    return results
+
+# -----------------------------
+# Guardrails (Step 5)
+# -----------------------------
+SYSTEM_GUARDRAILS = """You are a call-center assistant constrained to the provided context snippets.
+Rules:
+- Answer ONLY using the snippets provided.
+- If information is insufficient, reply exactly: "I don’t know based on the documents I have."
+- When citing, list the exact filenames returned by retrieval; do NOT invent filenames.
+- Keep answers concise and actionable for agents.
+"""
+
+def build_user_prompt(question: str, snippets: List[dict]) -> str:
+    lines = []
+    for i, s in enumerate(snippets, start=1):
+        lines.append(f"[{i}] FILE: {s['filename']}\nSNIPPET: {s['snippet']}\n")
+    context_block = "\n".join(lines) if lines else "(no context)"
+    return f"""Question: {question}
+
+Context snippets:
+{context_block}
+
+Instructions:
+- Use only the context above.
+- Cite filenames like [1] FILE: <name> at the end of the answer when relevant.
+"""
+
+# -----------------------------
 # Helpers
 # -----------------------------
 def allowed_file(filename: str) -> bool:
@@ -181,7 +274,6 @@ def fetch_url_text(url: str, max_chars: int = 50_000) -> str:
         r = requests.get(url, headers=headers, timeout=20, allow_redirects=True)
         r.raise_for_status()
         soup = BeautifulSoup(r.text, "html.parser")
-        # Strip obvious noise but keep <noscript> (some sites render fallback content there)
         for tag in soup(["script", "style"]):
             tag.decompose()
         text = soup.get_text(separator=" ")
@@ -194,16 +286,16 @@ def fetch_url_text(url: str, max_chars: int = 50_000) -> str:
 
 def ingest_entry(entry: CompanyData):
     """Extract text from a file or URL and store in entry.content."""
-    text = ""
+    text_val = ""
     if entry.filename:
         path = os.path.join(app.config["UPLOAD_FOLDER"], entry.filename)
         ext = entry.filename.rsplit(".", 1)[-1].lower()
         if ext == "pdf":
-            text = extract_text_from_pdf(path)
+            text_val = extract_text_from_pdf(path)
         elif ext == "txt":
             try:
                 with open(path, "r", encoding="utf-8", errors="ignore") as f:
-                    text = _condense_ws(f.read())[:50_000]
+                    text_val = _condense_ws(f.read())[:50_000]
             except Exception as e:
                 app.logger.error(f"TXT read failed for {path}: {e}")
         elif ext == "csv":
@@ -212,81 +304,62 @@ def ingest_entry(entry: CompanyData):
                     lines = []
                     for i, line in enumerate(f):
                         lines.append(line.strip())
-                        if i >= 500:  # grab a decent chunk
+                        if i >= 500:
                             break
-                    text = _condense_ws("\n".join(lines))[:50_000]
+                    text_val = _condense_ws("\n".join(lines))[:50_000]
             except Exception as e:
                 app.logger.error(f"CSV read failed for {path}: {e}")
         else:
             app.logger.info(f"Unsupported file extension for ingestion: {ext}")
     else:
-        # Treat as URL if it looks like one
         if entry.name_or_url and entry.name_or_url.lower().startswith(("http://", "https://")):
-            text = fetch_url_text(entry.name_or_url)
+            text_val = fetch_url_text(entry.name_or_url)
 
-    entry.content = text
+    entry.content = text_val
     db.session.add(entry)
     app.logger.info(f"Ingested item {entry.id or '(new)'} "
-                    f"{entry.name_or_url or entry.filename}: {len(text)} chars")
+                    f"{entry.name_or_url or entry.filename}: {len(text_val)} chars")
 
-def simple_rank(items: List[CompanyData], query: str, k: int = 5) -> List[CompanyData]:
-    """Basic keyword scoring to pick the most relevant entries."""
-    q = query.lower()
-    terms = [t for t in re.split(r"[^a-z0-9]+", q) if t]
-    if not terms:
-        return items[:k]
+# -----------------------------
+# Full‑text bootstrap (safe to run)
+# -----------------------------
+def ensure_fulltext_indexes():
+    """Create tsvector column/index + triggers (idempotent)."""
+    sql = """
+    -- Add tsvector on company_data
+    ALTER TABLE public.company_data
+      ADD COLUMN IF NOT EXISTS content_tsv tsvector;
 
-    ranked: List[Tuple[int, CompanyData]] = []
-    for it in items:
-        if not it.content:
-            continue
-        text_low = it.content.lower()
-        score = 0
-        for t in terms:
-            score += text_low.count(t) * 5
-        score += len({t for t in terms if t in text_low})
-        if score > 0:
-            ranked.append((score, it))
+    -- Backfill missing vectors
+    UPDATE public.company_data
+    SET content_tsv = to_tsvector('english', coalesce(content,''))
+    WHERE content_tsv IS NULL;
 
-    ranked.sort(key=lambda x: x[0], reverse=True)
-    return [it for _, it in ranked[:k]]
+    -- Index for fast search
+    CREATE INDEX IF NOT EXISTS idx_company_data_tsv ON public.company_data USING GIN (content_tsv);
 
-def smart_snippets(text: str, query: str, window: int = 600, max_snippets: int = 3) -> str:
-    """Return a few merged windows around matches, or a head slice if no match."""
-    if not text:
-        return ""
-    low = text.lower()
-    terms = [t for t in re.split(r"[^a-z0-9]+", (query or "").lower()) if t]
-    if not terms:
-        return _condense_ws(text[: 2 * window * max_snippets])
+    -- Trigger to keep it fresh
+    CREATE OR REPLACE FUNCTION public.company_data_tsv_refresh()
+    RETURNS trigger AS $$
+    BEGIN
+      NEW.content_tsv := to_tsvector('english', coalesce(NEW.content,''));
+      RETURN NEW;
+    END;
+    $$ LANGUAGE plpgsql;
 
-    spans = []
-    for t in terms:
-        start = 0
-        while True:
-            i = low.find(t, start)
-            if i == -1:
-                break
-            s = max(0, i - window)
-            e = min(len(text), i + len(t) + window)
-            spans.append((s, e))
-            start = i + len(t)
-    if not spans:
-        return _condense_ws(text[: 2 * window * max_snippets])
+    DROP TRIGGER IF EXISTS trg_company_data_tsv ON public.company_data;
+    CREATE TRIGGER trg_company_data_tsv
+    BEFORE INSERT OR UPDATE OF content ON public.company_data
+    FOR EACH ROW
+    EXECUTE FUNCTION public.company_data_tsv_refresh();
 
-    spans.sort()
-    merged = []
-    cs, ce = spans[0]
-    for s, e in spans[1:]:
-        if s <= ce:
-            ce = max(ce, e)
-        else:
-            merged.append((cs, ce))
-            cs, ce = s, e
-    merged.append((cs, ce))
-    merged = merged[:max_snippets]
-    chunks = [_condense_ws(text[s:e]) for s, e in merged]
-    return "\n...\n".join(chunks)
+    -- Optional: provenance columns on knowledge (filename + link back)
+    ALTER TABLE public.knowledge
+      ADD COLUMN IF NOT EXISTS filename varchar(255),
+      ADD COLUMN IF NOT EXISTS source_company_data_id int REFERENCES public.company_data(id);
+    """
+    with db.engine.begin() as conn:
+        conn.execute(text(sql))
 
 # -----------------------------
 # Errors
@@ -353,12 +426,10 @@ def delete_company(company_id: int):
     if "user_id" not in session:
         return redirect(url_for("login"))
     try:
-        # Remove related rows in legacy 'knowledge' table if it exists
         try:
             db.session.execute(text("DELETE FROM knowledge WHERE company_id = :cid"), {"cid": company_id})
         except Exception:
-            pass  # table may not exist
-
+            pass
         CompanyData.query.filter_by(company_id=company_id).delete()
         company = Company.query.get_or_404(company_id)
         db.session.delete(company)
@@ -455,6 +526,11 @@ def agent(company_id: int):
 
 @app.route("/agent_api", methods=["POST"])
 def agent_api():
+    """
+    Answers a question for a given company_id by:
+    1) Running high-precision retrieval (Postgres FTS) to get filename+snippets
+    2) Calling the LLM with strict guardrails to prevent wrong citations
+    """
     if "user_id" not in session:
         return jsonify({"error": "Unauthorized"}), 401
     try:
@@ -466,65 +542,28 @@ def agent_api():
 
         client = get_openai_client()
 
-        # Collect and rank company content
-        context = ""
+        # Build retrieval context (filenames + snippets)
+        snippets = []
         if company_id:
-            items = CompanyData.query.filter_by(company_id=company_id).order_by(CompanyData.created_at.desc()).all()
+            # lazy ensure FTS infra is present
+            ensure_fulltext_indexes()
+            snippets = get_context_snippets(user_message, company_id)
 
-            # Lazily ingest any empty items
-            updated = False
-            for it in items:
-                if not it.content:
-                    try:
-                        ingest_entry(it)
-                        updated = True
-                    except Exception as e:
-                        app.logger.error(f"Lazy ingest failed for item {it.id}: {e}")
-            if updated:
-                db.session.commit()
-
-            # Build generous context with smart snippets
-            pieces = []
-            remaining = 6000  # char budget for context
-            for it in simple_rank(items, user_message, k=5):
-                text = it.content or ""
-                if not text:
-                    continue
-                title = it.name_or_url or it.filename or "Item"
-                if len(text) <= 3500:
-                    chunk = text
-                else:
-                    chunk = smart_snippets(text, user_message, window=600, max_snippets=3)
-                block = f"### {title}\n{chunk}"
-                if len(block) > remaining:
-                    block = block[:remaining]
-                pieces.append(block)
-                remaining -= len(block)
-                if remaining <= 0:
-                    break
-            context = "\n\n".join(pieces)
-            app.logger.info(f"Agent context items={len(pieces)} chars={len(context)}")
-
-        system_prompt = (
-            "You are a helpful AI assistant for call center agents. "
-            "Answer clearly and concisely using ONLY the provided context. "
-            "If the context does not contain the answer, say you don't know "
-            "and suggest which document or page to check."
-        )
-        user_content = user_message if not context else f"Context:\n{context}\n\nQuestion:\n{user_message}"
+        # Guardrails + prompt
+        user_prompt = build_user_prompt(user_message, snippets)
 
         resp = client.chat.completions.create(
             model="gpt-4o-mini",
             messages=[
-                {"role": "system", "content": system_prompt},
-                {"role": "user", "content": user_content},
+                {"role": "system", "content": SYSTEM_GUARDRAILS},
+                {"role": "user", "content": user_prompt},
             ],
             max_tokens=500,
             temperature=0.2,
         )
 
         text_out = resp.choices[0].message.content.strip()
-        return jsonify({"answer": text_out})
+        return jsonify({"answer": text_out, "sources": snippets})
     except Exception as e:
         app.logger.error(f"Agent API error: {e}")
         return jsonify({"answer": f"Error: {str(e)}"}), 500
@@ -540,6 +579,8 @@ with app.app_context():
     check_database()
     db.create_all()
     create_default_admin()
+    # safe to call repeatedly; creates/refreshes FTS infra
+    ensure_fulltext_indexes()
 
 if __name__ == "__main__":
     # On Render, use: gunicorn app:app
