@@ -572,6 +572,22 @@ def agent_api():
 def health():
     return jsonify({"status": "ok"}), 200
 
+@app.route("/ingest_entry/<int:entry_id>", methods=["POST"])
+def ingest_single(entry_id: int):
+    if "user_id" not in session:
+        return redirect(url_for("login"))
+    try:
+        entry = CompanyData.query.get_or_404(entry_id)
+        ingest_entry(entry)
+        db.session.commit()
+        flash(f"Re‑ingested entry {entry_id}", "success")
+        return redirect(url_for("manage", company_id=entry.company_id))
+    except Exception as e:
+        app.logger.error(f"Single reingest error: {e}")
+        flash("Failed to re‑ingest entry.", "error")
+        return redirect(url_for("dashboard"))
+
+
 # -----------------------------
 # App startup
 # -----------------------------

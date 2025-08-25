@@ -53,44 +53,89 @@
         <div class="flex items-center gap-2">
           <button class="bg-gray-900 text-white px-4 py-2 rounded hover:bg-gray-800" type="submit">Submit</button>
           <a class="text-sm text-blue-600 hover:underline"
-             href="{{ url_for('reingest', company_id=company.id) }}">Re-ingest all</a>
+             href="{{ url_for('reingest', company_id=company.id) }}">Re‑ingest all</a>
         </div>
       </form>
     </section>
 
-    <!-- Existing data list -->
+    <!-- Ingestion summary -->
+    {% set total = data|length %}
+    {% set not_ing = (data|selectattr('content','equalto',None)|list|length)
+                      + (data|selectattr('content','string')|selectattr('__len__','equalto',0)|list|length) %}
+    <section class="mb-3">
+      <div class="text-sm text-gray-600">
+        <span class="px-2 py-1 border rounded-full text-xs bg-gray-50">Total: {{ total }}</span>
+        <span class="px-2 py-1 border rounded-full text-xs bg-amber-50 text-amber-800 ml-2">Not ingested: {{ not_ing }}</span>
+        <span class="px-2 py-1 border rounded-full text-xs bg-emerald-50 text-emerald-800 ml-2">Ingested: {{ total - not_ing }}</span>
+      </div>
+    </section>
+
+    <!-- Existing data list (table view) -->
     <section class="bg-white p-4 rounded-xl shadow">
       <div class="flex items-center justify-between mb-3">
         <h2 class="font-semibold text-gray-900">Company data</h2>
-        <span class="text-xs text-gray-500">{{ data|length }} item{{ '' if (data|length == 1) else 's' }}</span>
+        <span class="text-xs text-gray-500">{{ total }} item{{ '' if (total == 1) else 's' }}</span>
       </div>
 
       {% if data %}
-        <ul class="divide-y">
-          {% for item in data %}
-            <li class="py-3 flex flex-col sm:flex-row sm:items-center sm:justify-between gap-2">
-              <div class="min-w-0">
-                <div class="text-gray-900 font-medium truncate">
-                  {{ item.name_or_url or item.filename }}
-                </div>
-                <div class="text-xs text-gray-500">
-                  {{ item.created_at }}
-                </div>
-                {% if item.content %}
-                  <div class="text-sm text-gray-600 mt-1 line-clamp-2" style="line-clamp:2;-webkit-line-clamp:2;display:-webkit-box;-webkit-box-orient:vertical;overflow:hidden;">
-                    {{ (item.content[:180] ~ ('…' if item.content|length > 180 else '')) }}
+      <div class="overflow-x-auto">
+        <table class="min-w-full text-sm">
+          <thead class="bg-gray-50">
+            <tr>
+              <th class="text-left py-2 px-3">ID</th>
+              <th class="text-left py-2 px-3">Type</th>
+              <th class="text-left py-2 px-3">Name / URL</th>
+              <th class="text-left py-2 px-3">Chars</th>
+              <th class="text-left py-2 px-3">Status</th>
+              <th class="text-left py-2 px-3">Created</th>
+              <th class="text-left py-2 px-3">Actions</th>
+            </tr>
+          </thead>
+          <tbody class="divide-y">
+            {% for item in data %}
+              {% set length = (item.content or '')|length %}
+              {% set is_file = (item.filename or '') != '' %}
+              <tr class="hover:bg-gray-50">
+                <td class="py-2 px-3">{{ item.id }}</td>
+                <td class="py-2 px-3">
+                  <span class="px-2 py-1 text-xs rounded-full border {{ 'bg-blue-50 text-blue-700' if is_file else 'bg-green-50 text-green-700' }}">
+                    {{ 'File' if is_file else 'URL' }}
+                  </span>
+                </td>
+                <td class="py-2 px-3">
+                  <div class="font-medium text-gray-900 truncate max-w-xs">
+                    {{ item.filename if is_file else item.name_or_url }}
                   </div>
-                {% else %}
-                  <div class="text-xs text-yellow-700 mt-1">Not ingested yet (will ingest automatically on next question or via Re-ingest)</div>
-                {% endif %}
-              </div>
-              <div class="flex items-center gap-3">
-                <a class="text-sm text-red-600 hover:underline"
-                   href="{{ url_for('delete_entry', entry_id=item.id) }}">Delete</a>
-              </div>
-            </li>
-          {% endfor %}
-        </ul>
+                  {% if length > 0 %}
+                    <div class="text-xs text-gray-500 mt-0.5 truncate max-w-md">
+                      {{ (item.content[:140] ~ ('…' if item.content|length > 140 else '')) }}
+                    </div>
+                  {% endif %}
+                </td>
+                <td class="py-2 px-3 tabular-nums">{{ length }}</td>
+                <td class="py-2 px-3">
+                  {% if length > 0 %}
+                    <span class="px-2 py-1 text-xs rounded-full bg-emerald-50 text-emerald-700 border">Ingested</span>
+                  {% else %}
+                    <span class="px-2 py-1 text-xs rounded-full bg-amber-50 text-amber-700 border">Not ingested</span>
+                  {% endif %}
+                </td>
+                <td class="py-2 px-3 text-gray-500">{{ item.created_at.strftime('%Y-%m-%d %H:%M') if item.created_at else '-' }}</td>
+                <td class="py-2 px-3">
+                  <div class="flex items-center gap-2">
+                    <form method="POST" action="{{ url_for('ingest_single', entry_id=item.id) }}">
+                      <button class="px-3 py-1.5 text-xs bg-indigo-600 text-white rounded-md" title="Re‑ingest this item">Re‑ingest</button>
+                    </form>
+                    <a class="px-3 py-1.5 text-xs bg-red-600 text-white rounded-md"
+                       href="{{ url_for('delete_entry', entry_id=item.id) }}"
+                       onclick="return confirm('Delete this entry?')">Delete</a>
+                  </div>
+                </td>
+              </tr>
+            {% endfor %}
+          </tbody>
+        </table>
+      </div>
       {% else %}
         <p class="text-sm text-gray-500">No data yet. Upload a file or add a URL above.</p>
       {% endif %}
