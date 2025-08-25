@@ -12,15 +12,19 @@
     .typing .dot:nth-child(3){ animation-delay:.4s; }
     @keyframes blink{0%,80%,100%{opacity:.2;transform:translateY(0)}40%{opacity:1;transform:translateY(-2px)}}
     #chat-box::-webkit-scrollbar { width: 8px; } #chat-box::-webkit-scrollbar-thumb { background:#E5E7EB;border-radius:9999px } #chat-box:hover::-webkit-scrollbar-thumb{background:#D1D5DB}
+    .src-card { border:1px solid #e5e7eb; border-radius:12px; background:#fff; }
+    .src-summary { cursor:pointer; }
+    .badge { font-size:11px; padding:2px 8px; border:1px solid #e5e7eb; border-radius:9999px; color:#6b7280; }
   </style>
 </head>
 <body class="bg-gray-100">
   <main class="flex flex-col h-screen">
-    <header class="bg-white border-b px-4 md:px-6 py-3 flex items-center">
+    <header class="bg-white border-b px-4 md:px-6 py-3 flex items-center justify-between">
       <div class="flex items-center space-x-3">
         <div class="w-8 h-8 rounded-xl bg-gray-900 text-white flex items-center justify-center font-bold">L1</div>
         <h1 class="text-lg md:text-xl font-semibold text-gray-900">{{ company.name }}</h1>
       </div>
+      <div class="hidden md:block badge">Company ID: {{ company.id }}</div>
     </header>
 
     <section id="chat-box" class="flex-1 overflow-y-auto px-3 md:px-6 py-4 md:py-6 space-y-4"></section>
@@ -62,15 +66,51 @@
       wrap.appendChild(bubble); chatBox.appendChild(wrap); scrollToBottom(); return bubble;
     }
 
+    function renderSourcesBelow(bubble, sources){
+      if(!Array.isArray(sources) || sources.length===0) return;
+      const box=document.createElement('div');
+      box.className='mt-3 space-y-2';
+      const title=document.createElement('div');
+      title.className='text-xs uppercase tracking-wide text-gray-400';
+      title.textContent='Sources';
+      box.appendChild(title);
+
+      sources.forEach((s, i)=>{
+        const card=document.createElement('details');
+        card.className='src-card p-3';
+        const sum=document.createElement('summary');
+        sum.className='src-summary text-sm font-medium text-gray-800';
+        sum.innerHTML=`[${i+1}] ${escapeHtml(s.filename||'(no filename)')}`;
+        const snip=document.createElement('div');
+        snip.className='mt-2 text-xs text-gray-600';
+        snip.innerHTML=nl2br(escapeHtml(s.snippet||''));
+        card.appendChild(sum);
+        card.appendChild(snip);
+        box.appendChild(card);
+      });
+
+      bubble.appendChild(box);
+      scrollToBottom();
+    }
+
     async function sendMessage(){
       const raw=inputEl.value; const message=raw.trim(); if(!message||isSending) return;
       appendBubble(nl2br(escapeHtml(message)),'user');
       inputEl.value=''; autoResize(); inputEl.disabled=true; sendBtn.disabled=true; isSending=true;
       const thinkingBubble=appendThinking();
       try{
-        const res=await fetch(`{{ url_for("agent_api") }}?company_id={{ company.id }}`,{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({message})});
+        const res=await fetch(`{{ url_for("agent_api") }}?company_id={{ company.id }}`,{
+          method:'POST',
+          headers:{'Content-Type':'application/json'},
+          body:JSON.stringify({message})
+        });
         const data=await res.json();
-        thinkingBubble.innerHTML=nl2br(escapeHtml(data.answer||''));
+        const answerSafe = nl2br(escapeHtml((data && data.answer) || ''));
+        thinkingBubble.innerHTML = answerSafe;
+        // NEW: render sources (array of {filename, snippet})
+        if(data && Array.isArray(data.sources)){
+          renderSourcesBelow(thinkingBubble, data.sources);
+        }
       }catch(e){
         thinkingBubble.innerHTML='<span class="text-red-600">Sorry, something went wrong.</span>';
       }finally{
@@ -85,3 +125,4 @@
   </script>
 </body>
 </html>
+
