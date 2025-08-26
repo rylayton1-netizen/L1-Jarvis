@@ -538,11 +538,12 @@ def dashboard():
         else:
             companies = Company.query.filter_by(owner_id=user.id).order_by(Company.created_at.desc()).all()
 
-        return render_template("dashboard.html", companies=companies)
+        # 👇 THIS is the line you add (instead of the old render_template)
+        return render_template("dashboard.html", companies=companies, user=user)
     except Exception as e:
         app.logger.error(f"Dashboard error: {e}")
         flash("Failed to load dashboard.", "error")
-        return render_template("dashboard.html", companies=[]), 500
+        return render_template("dashboard.html", companies=[], user=current_user()), 500
 
 @app.route("/delete_company/<int:company_id>")
 def delete_company(company_id: int):
