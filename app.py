@@ -6,12 +6,12 @@ from typing import List, Tuple
 
 from flask import (
     Flask, render_template, request, redirect, url_for,
-    session, jsonify, flash
+    session, jsonify, flash, abort
 )
 from flask_sqlalchemy import SQLAlchemy
 from werkzeug.security import generate_password_hash, check_password_hash
 from werkzeug.utils import secure_filename
-from sqlalchemy import text
+from sqlalchemy import text, or_
 from dotenv import load_dotenv
 
 import requests
@@ -86,19 +86,35 @@ db = SQLAlchemy(app)
 # Database Models
 # -----------------------------
 class User(db.Model):
+    __tablename__ = "user"
     id = db.Column(db.Integer, primary_key=True)
-    username = db.Column(db.String(150), unique=True, nullable=False)
+    username = db.Column(db.String(150), unique=True, nullable=False, index=True)
+    email = db.Column(db.String(255), unique=True, nullable=True, index=True)
     password_hash = db.Column(db.String(255), nullable=False)
     created_at = db.Column(db.DateTime, default=datetime.utcnow)
 
+    # convenience
+    def set_password(self, raw: str):
+        self.password_hash = generate_password_hash(raw)
+
+    def check_password(self, raw: str) -> bool:
+        return check_password_hash(self.password_hash, raw)
+
+
 class Company(db.Model):
+    __tablename__ = "company"
     id = db.Column(db.Integer, primary_key=True)
     name = db.Column(db.String(150), unique=True, nullable=False)
+    owner_id = db.Column(db.Integer, db.ForeignKey("user.id"), nullable=True, index=True)
     created_at = db.Column(db.DateTime, default=datetime.utcnow)
 
+    owner = db.relationship("User", backref="companies")
+
+
 class CompanyData(db.Model):
+    __tablename__ = "company_data"
     id = db.Column(db.Integer, primary_key=True)
-    company_id = db.Column(db.Integer, db.ForeignKey("company.id"), nullable=False)
+    company_id = db.Column(db.Integer, db.ForeignKey("company.id"), nullable=False, index=True)
     name_or_url = db.Column(db.String(255))  # filename or URL
     filename = db.Column(db.String(255))     # if a file was uploaded
     content = db.Column(db.Text)             # extracted text
@@ -183,9 +199,8 @@ Rules:
 """
 
 def build_user_prompt(question: str, snippets: List[dict]) -> str:
-    # We still show filenames to the model for grounding, but we do NOT ask it to print them.
     lines = []
-    for i, s in enumerate(snippets, start=1):
+    for s in snippets:
         lines.append(f"FILE: {s['filename']}\nSNIPPET: {s['snippet']}\n")
     context_block = "\n".join(lines) if lines else "(no context)"
     return f"""Question: {question}
@@ -214,10 +229,17 @@ def check_database():
         raise RuntimeError("Cannot connect to DB. Check DATABASE_URL / SSL / perms.")
 
 def create_default_admin():
+    """
+    Creates a default admin user (and a sample company) if DB is empty.
+    Safe to run repeatedly.
+    """
     try:
         if User.query.count() == 0:
-            admin = User(username="admin", password_hash=generate_password_hash("admin123"))
+            admin = User(username="admin", email="admin@example.com", password_hash=generate_password_hash("admin123"))
             db.session.add(admin)
+            db.session.flush()
+            sample_co = Company(name="Admin Co", owner_id=admin.id)
+            db.session.add(sample_co)
             db.session.commit()
             app.logger.info("Default admin created: admin / admin123")
     except Exception as e:
@@ -234,10 +256,6 @@ def _condense_ws(text: str) -> str:
     return re.sub(r"\s+", " ", text or "").strip()
 
 def extract_text_from_pdf(path: str, max_chars: int = 50_000) -> str:
-    """
-    Try PyPDF2 first; if we get too little text (scanned PDF or tricky layout),
-    fall back to pdfminer.six which is more robust for text extraction.
-    """
     text_val = ""
     # Attempt 1: PyPDF2
     try:
@@ -365,17 +383,36 @@ def ensure_fulltext_indexes():
         conn.execute(text(sql))
 
 # -----------------------------
-# Answer sanitizer (remove trailing inline file/source lines)
+# Answer sanitizer
 # -----------------------------
 def strip_inline_source_suffix(s: str) -> str:
     if not s:
         return s
     lines = s.rstrip().splitlines()
-    # Remove one or more trailing lines like:
-    # "[1] FILE: foo.pdf", "FILE: foo", "Source: foo"
     while lines and re.match(r'^(?:\[\d+\]\s*)?(?:file|source)\s*:\s*.+$', lines[-1].strip(), re.IGNORECASE):
         lines.pop()
     return "\n".join(lines).rstrip()
+
+# -----------------------------
+# Auth utilities
+# -----------------------------
+def current_user():
+    uid = session.get("user_id")
+    if not uid:
+        return None
+    return User.query.get(uid)
+
+def require_login():
+    if "user_id" not in session:
+        return redirect(url_for("login"))
+    return None
+
+def require_company_owner(company_id: int):
+    user = current_user()
+    if not user:
+        return False
+    company = Company.query.get_or_404(company_id)
+    return (company.owner_id == user.id) or (user.username == "admin")
 
 # -----------------------------
 # Errors
@@ -390,47 +427,117 @@ def server_error(_):
     return render_template("login.html"), 500
 
 # -----------------------------
-# Routes
+# Routes: Auth
 # -----------------------------
 @app.route("/", methods=["GET", "POST"])
 @app.route("/login", methods=["GET", "POST"])
 def login():
     try:
         if request.method == "POST":
-            username = request.form.get("username", "").strip()
+            username_or_email = request.form.get("username", "").strip()
             password = request.form.get("password", "")
 
-            user = User.query.filter_by(username=username).first()
-            if user and check_password_hash(user.password_hash, password):
+            user = User.query.filter(
+                or_(User.username == username_or_email, User.email == username_or_email)
+            ).first()
+
+            if user and user.check_password(password):
                 session["user_id"] = user.id
                 return redirect(url_for("dashboard"))
 
-            flash("Invalid username or password", "error")
+            flash("Invalid username/email or password", "error")
         return render_template("login.html")
     except Exception as e:
         app.logger.error(f"Login route error: {e}")
         flash("Login failed. Check logs.", "error")
         return render_template("login.html"), 500
 
+@app.route("/signup", methods=["GET", "POST"])
+def signup():
+    try:
+        if request.method == "POST":
+            company_name = (request.form.get("company_name") or "").strip()
+            username = (request.form.get("username") or "").strip()
+            email = (request.form.get("email") or "").strip().lower() or None
+            password = request.form.get("password") or ""
+            confirm = request.form.get("confirm") or ""
+
+            # Basic validation
+            if not company_name or not username or not password:
+                flash("Please fill in all required fields.", "error")
+                return render_template("signup.html", preset={
+                    "company_name": company_name, "username": username, "email": email or ""
+                })
+            if password != confirm:
+                flash("Passwords do not match.", "error")
+                return render_template("signup.html", preset={
+                    "company_name": company_name, "username": username, "email": email or ""
+                })
+            if User.query.filter(or_(User.username == username, User.email == email)).first():
+                flash("Username or email is already in use.", "error")
+                return render_template("signup.html", preset={
+                    "company_name": company_name, "username": username, "email": email or ""
+                })
+            if Company.query.filter_by(name=company_name).first():
+                flash("Company name is taken. Choose another.", "error")
+                return render_template("signup.html", preset={
+                    "company_name": company_name, "username": username, "email": email or ""
+                })
+
+            # Create user + company (atomic)
+            user = User(username=username, email=email)
+            user.set_password(password)
+            db.session.add(user)
+            db.session.flush()  # get user.id
+
+            company = Company(name=company_name, owner_id=user.id)
+            db.session.add(company)
+            db.session.commit()
+
+            # Log in
+            session["user_id"] = user.id
+            flash("Account created! Welcome 👋", "success")
+            return redirect(url_for("dashboard"))
+
+        return render_template("signup.html")
+    except Exception as e:
+        app.logger.error(f"Signup route error: {e}")
+        db.session.rollback()
+        flash("Sign up failed. Please try again.", "error")
+        return render_template("signup.html"), 500
+
 @app.route("/logout")
 def logout():
     session.pop("user_id", None)
     return redirect(url_for("login"))
 
+# -----------------------------
+# Routes: App
+# -----------------------------
 @app.route("/dashboard", methods=["GET", "POST"])
 def dashboard():
     if "user_id" not in session:
         return redirect(url_for("login"))
     try:
+        user = current_user()
         if request.method == "POST":
             company_name = request.form.get("company_name", "").strip()
             if company_name:
-                new_company = Company(name=company_name)
-                db.session.add(new_company)
-                db.session.commit()
-                flash("Company created", "success")
+                if Company.query.filter_by(name=company_name).first():
+                    flash("Company name is already in use.", "error")
+                else:
+                    new_company = Company(name=company_name, owner_id=user.id)
+                    db.session.add(new_company)
+                    db.session.commit()
+                    flash("Company created", "success")
                 return redirect(url_for("dashboard"))
-        companies = Company.query.order_by(Company.created_at.desc()).all()
+
+        # Only show companies owned by this user (admin sees all)
+        if user.username == "admin":
+            companies = Company.query.order_by(Company.created_at.desc()).all()
+        else:
+            companies = Company.query.filter_by(owner_id=user.id).order_by(Company.created_at.desc()).all()
+
         return render_template("dashboard.html", companies=companies)
     except Exception as e:
         app.logger.error(f"Dashboard error: {e}")
@@ -442,10 +549,15 @@ def delete_company(company_id: int):
     if "user_id" not in session:
         return redirect(url_for("login"))
     try:
+        if not require_company_owner(company_id):
+            abort(403)
+
+        # Best-effort cleanup of related rows
         try:
             db.session.execute(text("DELETE FROM knowledge WHERE company_id = :cid"), {"cid": company_id})
         except Exception:
             pass
+
         CompanyData.query.filter_by(company_id=company_id).delete()
         company = Company.query.get_or_404(company_id)
         db.session.delete(company)
@@ -461,6 +573,9 @@ def manage(company_id: int):
     if "user_id" not in session:
         return redirect(url_for("login"))
     try:
+        if not require_company_owner(company_id):
+            abort(403)
+
         company = Company.query.get_or_404(company_id)
 
         if request.method == "POST":
@@ -494,6 +609,9 @@ def reingest(company_id: int):
     if "user_id" not in session:
         return redirect(url_for("login"))
     try:
+        if not require_company_owner(company_id):
+            abort(403)
+
         company = Company.query.get_or_404(company_id)
         items = CompanyData.query.filter_by(company_id=company.id).all()
         for it in items:
@@ -511,6 +629,9 @@ def delete_entry(entry_id: int):
         return redirect(url_for("login"))
     try:
         entry = CompanyData.query.get_or_404(entry_id)
+        if not require_company_owner(entry.company_id):
+            abort(403)
+
         company_id = entry.company_id
         if entry.filename:
             try:
@@ -533,6 +654,8 @@ def agent(company_id: int):
     if "user_id" not in session:
         return redirect(url_for("login"))
     try:
+        if not require_company_owner(company_id):
+            abort(403)
         company = Company.query.get_or_404(company_id)
         return render_template("agent.html", company=company)
     except Exception as e:
@@ -555,6 +678,10 @@ def agent_api():
         company_id = int(request.args.get("company_id", "0") or 0)
         if not user_message:
             return jsonify({"answer": "No input received"})
+
+        # authz
+        if not require_company_owner(company_id):
+            return jsonify({"error": "Forbidden"}), 403
 
         client = get_openai_client()
 
@@ -579,7 +706,6 @@ def agent_api():
         )
 
         text_out = (resp.choices[0].message.content or "").strip()
-        # Safety net: strip any trailing inline "FILE: ..." / "Source: ..." lines
         text_out = strip_inline_source_suffix(text_out)
 
         return jsonify({"answer": text_out, "sources": snippets})
@@ -597,6 +723,9 @@ def ingest_single(entry_id: int):
         return redirect(url_for("login"))
     try:
         entry = CompanyData.query.get_or_404(entry_id)
+        if not require_company_owner(entry.company_id):
+            abort(403)
+
         ingest_entry(entry)
         db.session.commit()
         flash(f"Re-ingested entry {entry_id}", "success")
@@ -605,7 +734,6 @@ def ingest_single(entry_id: int):
         app.logger.error(f"Single reingest error: {e}")
         flash("Failed to re-ingest entry.", "error")
         return redirect(url_for("dashboard"))
-
 
 # -----------------------------
 # App startup

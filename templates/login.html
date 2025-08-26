@@ -1,3 +1,4 @@
+<!-- templates/login.html -->
 <!DOCTYPE html>
 <html lang="en">
 <head>
@@ -13,14 +14,15 @@
         <div class="w-9 h-9 rounded-xl bg-gray-900 text-white flex items-center justify-center font-bold">L1</div>
         <h1 class="text-lg font-semibold text-gray-900">Sign in</h1>
       </div>
+
       {% with messages = get_flashed_messages(with_categories=true) %}
         {% if messages %}
           <div class="space-y-2 mb-3">
             {% for category, msg in messages %}
               <div class="px-3 py-2 rounded text-sm
-                          {% if category == 'success' %} bg-green-50 text-green-800 border border-green-200
-                          {% elif category == 'error' %} bg-red-50 text-red-700 border border-red-200
-                          {% else %} bg-gray-50 text-gray-800 border border-gray-200 {% endif %}">
+                   {% if category == 'success' %} bg-green-50 text-green-800 border border-green-200
+                   {% elif category == 'error' %} bg-red-50 text-red-700 border border-red-200
+                   {% else %} bg-gray-50 text-gray-800 border border-gray-200 {% endif %}">
                 {{ msg }}
               </div>
             {% endfor %}
@@ -28,19 +30,29 @@
         {% endif %}
       {% endwith %}
 
-      <form method="POST" class="space-y-3">
+      <form method="POST" class="space-y-3" action="{{ url_for('login') }}">
         <div>
-          <label class="block text-sm text-gray-600 mb-1">Username</label>
+          <label class="block text-sm text-gray-600 mb-1">Username or Email</label>
           <input class="w-full border rounded px-3 py-2" type="text" name="username" autocomplete="username" required/>
         </div>
         <div>
           <label class="block text-sm text-gray-600 mb-1">Password</label>
           <input class="w-full border rounded px-3 py-2" type="password" name="password" autocomplete="current-password" required/>
         </div>
+
+        <!-- If you add CSRF protection later (Flask-WTF), include the hidden token here -->
+        <!-- {{ form.csrf_token }} -->
+
         <button class="w-full bg-gray-900 text-white px-4 py-2 rounded hover:bg-gray-800">Sign in</button>
       </form>
+
+      <div class="mt-4 text-center text-sm text-gray-600">
+        New here?
+        <a href="{{ url_for('signup') }}" class="font-medium text-gray-900 hover:underline">
+          Create an account
+        </a>
+      </div>
     </div>
   </div>
 </body>
 </html>
-

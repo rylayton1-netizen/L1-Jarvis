@@ -1,0 +1,77 @@
+<!-- templates/signup.html -->
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8"/>
+  <meta name="viewport" content="width=device-width, initial-scale=1.0"/>
+  <title>Create your account</title>
+  <link href="https://cdn.jsdelivr.net/npm/tailwindcss@2.2.19/dist/tailwind.min.css" rel="stylesheet"/>
+</head>
+<body class="bg-gray-100 min-h-screen flex items-center justify-center p-4">
+  <div class="w-full max-w-md">
+    <div class="bg-white border rounded-2xl shadow p-6">
+      <div class="flex items-center gap-3 mb-4">
+        <div class="w-9 h-9 rounded-xl bg-gray-900 text-white flex items-center justify-center font-bold">L1</div>
+        <h1 class="text-lg font-semibold text-gray-900">Create your account</h1>
+      </div>
+
+      {% with messages = get_flashed_messages(with_categories=true) %}
+        {% if messages %}
+          <div class="space-y-2 mb-3">
+            {% for category, msg in messages %}
+              <div class="px-3 py-2 rounded text-sm
+                   {% if category == 'success' %} bg-green-50 text-green-800 border border-green-200
+                   {% elif category == 'error' %} bg-red-50 text-red-700 border border-red-200
+                   {% else %} bg-gray-50 text-gray-800 border border-gray-200 {% endif %}">
+                {{ msg }}
+              </div>
+            {% endfor %}
+          </div>
+        {% endif %}
+      {% endwith %}
+
+      <form method="POST" class="space-y-3">
+        <div>
+          <label class="block text-sm text-gray-600 mb-1">Company name</label>
+          <input class="w-full border rounded px-3 py-2" type="text" name="company_name" required
+                 value="{{ (preset.company_name if preset else '') }}"/>
+        </div>
+
+        <div class="grid grid-cols-1 md:grid-cols-2 gap-3">
+          <div>
+            <label class="block text-sm text-gray-600 mb-1">Username</label>
+            <input class="w-full border rounded px-3 py-2" type="text" name="username" required
+                   value="{{ (preset.username if preset else '') }}"/>
+          </div>
+          <div>
+            <label class="block text-sm text-gray-600 mb-1">Email</label>
+            <input class="w-full border rounded px-3 py-2" type="email" name="email" autocomplete="email" required
+                   value="{{ (preset.email if preset else '') }}"/>
+          </div>
+        </div>
+
+        <div class="grid grid-cols-1 md:grid-cols-2 gap-3">
+          <div>
+            <label class="block text-sm text-gray-600 mb-1">Password</label>
+            <input class="w-full border rounded px-3 py-2" type="password" name="password" autocomplete="new-password" required/>
+            <p class="text-xs text-gray-500 mt-1">Use 8+ chars with a mix of letters & numbers.</p>
+          </div>
+          <div>
+            <label class="block text-sm text-gray-600 mb-1">Confirm password</label>
+            <input class="w-full border rounded px-3 py-2" type="password" name="confirm" autocomplete="new-password" required/>
+          </div>
+        </div>
+
+        <button class="w-full bg-gray-900 text-white px-4 py-2 rounded hover:bg-gray-800">
+          Create account
+        </button>
+      </form>
+
+      <div class="mt-4 text-center text-sm text-gray-600">
+        Already have an account?
+        <a href="{{ url_for('login') }}" class="font-medium text-gray-900 hover:underline">Sign in</a>
+      </div>
+    </div>
+  </div>
+</body>
+</html>
