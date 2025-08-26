@@ -2,16 +2,16 @@ import os
 import re
 import logging
 from datetime import datetime
-from typing import List, Tuple
+from typing import List
 
 from flask import (
     Flask, render_template, request, redirect, url_for,
-    session, jsonify, flash, abort
+    session, jsonify, flash
 )
 from flask_sqlalchemy import SQLAlchemy
 from werkzeug.security import generate_password_hash, check_password_hash
 from werkzeug.utils import secure_filename
-from sqlalchemy import text, or_
+from sqlalchemy import text, asc, or_
 from dotenv import load_dotenv
 
 import requests
@@ -88,33 +88,34 @@ db = SQLAlchemy(app)
 class User(db.Model):
     __tablename__ = "user"
     id = db.Column(db.Integer, primary_key=True)
-    username = db.Column(db.String(150), unique=True, nullable=False, index=True)
-    email = db.Column(db.String(255), unique=True, nullable=True, index=True)
+    username = db.Column(db.String(150), unique=True, nullable=False)
+    email = db.Column(db.String(255), unique=True, nullable=True)
     password_hash = db.Column(db.String(255), nullable=False)
     created_at = db.Column(db.DateTime, default=datetime.utcnow)
+    # NOTE: column may be added later via ensure_schema_upgrades(); model allows attribute access
+    must_reset_password = db.Column(db.Boolean, default=False, nullable=False)
 
-    # convenience
-    def set_password(self, raw: str):
-        self.password_hash = generate_password_hash(raw)
+    def set_password(self, password: str):
+        # PBKDF2 for maximum compatibility across envs
+        self.password_hash = generate_password_hash(password, method="pbkdf2:sha256", salt_length=16)
 
-    def check_password(self, raw: str) -> bool:
-        return check_password_hash(self.password_hash, raw)
+    def check_password(self, password: str) -> bool:
+        return check_password_hash(self.password_hash, password)
 
 
 class Company(db.Model):
     __tablename__ = "company"
     id = db.Column(db.Integer, primary_key=True)
     name = db.Column(db.String(150), unique=True, nullable=False)
-    owner_id = db.Column(db.Integer, db.ForeignKey("user.id"), nullable=True, index=True)
     created_at = db.Column(db.DateTime, default=datetime.utcnow)
-
-    owner = db.relationship("User", backref="companies")
+    # Added by ensure_schema_upgrades() if missing
+    owner_id = db.Column(db.Integer, db.ForeignKey("user.id"), nullable=True)
 
 
 class CompanyData(db.Model):
     __tablename__ = "company_data"
     id = db.Column(db.Integer, primary_key=True)
-    company_id = db.Column(db.Integer, db.ForeignKey("company.id"), nullable=False, index=True)
+    company_id = db.Column(db.Integer, db.ForeignKey("company.id"), nullable=False)
     name_or_url = db.Column(db.String(255))  # filename or URL
     filename = db.Column(db.String(255))     # if a file was uploaded
     content = db.Column(db.Text)             # extracted text
@@ -199,8 +200,9 @@ Rules:
 """
 
 def build_user_prompt(question: str, snippets: List[dict]) -> str:
+    # We still show filenames to the model for grounding, but we do NOT ask it to print them.
     lines = []
-    for s in snippets:
+    for i, s in enumerate(snippets, start=1):
         lines.append(f"FILE: {s['filename']}\nSNIPPET: {s['snippet']}\n")
     context_block = "\n".join(lines) if lines else "(no context)"
     return f"""Question: {question}
@@ -228,14 +230,59 @@ def check_database():
         app.logger.error(f"Database connection failed: {e}")
         raise RuntimeError("Cannot connect to DB. Check DATABASE_URL / SSL / perms.")
 
+def ensure_schema_upgrades():
+    """
+    Bring an older DB up to date without Alembic. Safe to run repeatedly.
+    - add user.email + unique partial index (nullable)
+    - add user.must_reset_password (boolean default false)
+    - add company.owner_id + FK + index
+    """
+    ddl = """
+    -- user.email
+    ALTER TABLE "user" ADD COLUMN IF NOT EXISTS email varchar(255);
+    DO $$
+    BEGIN
+      IF NOT EXISTS (
+        SELECT 1 FROM pg_class c
+        JOIN pg_namespace n ON n.oid = c.relnamespace
+        WHERE c.relname = 'ix_user_email' AND n.nspname = 'public'
+      ) THEN
+        CREATE UNIQUE INDEX ix_user_email ON "user"(email) WHERE email IS NOT NULL;
+      END IF;
+    END $$;
+
+    -- user.must_reset_password
+    ALTER TABLE "user" ADD COLUMN IF NOT EXISTS must_reset_password boolean DEFAULT false NOT NULL;
+
+    -- company.owner_id
+    ALTER TABLE company ADD COLUMN IF NOT EXISTS owner_id integer;
+    DO $$
+    BEGIN
+      IF NOT EXISTS (
+        SELECT 1 FROM pg_constraint WHERE conname = 'fk_company_owner'
+      ) THEN
+        ALTER TABLE company
+          ADD CONSTRAINT fk_company_owner
+          FOREIGN KEY (owner_id) REFERENCES "user"(id) ON DELETE SET NULL;
+      END IF;
+    END $$;
+    CREATE INDEX IF NOT EXISTS ix_company_owner_id ON company(owner_id);
+    """
+    with db.engine.begin() as conn:
+        conn.execute(text(ddl))
+
 def create_default_admin():
     """
-    Creates a default admin user (and a sample company) if DB is empty.
-    Safe to run repeatedly.
+    Seed a default admin if the user table is empty.
+    Uses PBKDF2 to avoid scrypt mismatches across environments.
     """
     try:
         if User.query.count() == 0:
-            admin = User(username="admin", email="admin@example.com", password_hash=generate_password_hash("admin123"))
+            admin = User(
+                username="admin",
+                email="admin@example.com",
+                password_hash=generate_password_hash("admin123", method="pbkdf2:sha256", salt_length=16),
+            )
             db.session.add(admin)
             db.session.flush()
             sample_co = Company(name="Admin Co", owner_id=admin.id)
@@ -243,8 +290,9 @@ def create_default_admin():
             db.session.commit()
             app.logger.info("Default admin created: admin / admin123")
     except Exception as e:
+        db.session.rollback()
         app.logger.error(f"Failed creating default admin: {e}")
-        raise
+        # don't raise — app can still run if admin exists already
 
 def get_openai_client() -> OpenAI:
     key = os.environ.get("OPENAI_API_KEY")
@@ -252,10 +300,13 @@ def get_openai_client() -> OpenAI:
         app.logger.warning("OPENAI_API_KEY is not set.")
     return OpenAI(api_key=key)
 
-def _condense_ws(text: str) -> str:
-    return re.sub(r"\s+", " ", text or "").strip()
+def _condense_ws(text_in: str) -> str:
+    return re.sub(r"\s+", " ", text_in or "").strip()
 
 def extract_text_from_pdf(path: str, max_chars: int = 50_000) -> str:
+    """
+    Try PyPDF2 first; if too little text, fall back to pdfminer.six if installed.
+    """
     text_val = ""
     # Attempt 1: PyPDF2
     try:
@@ -383,18 +434,32 @@ def ensure_fulltext_indexes():
         conn.execute(text(sql))
 
 # -----------------------------
-# Answer sanitizer
+# Answer sanitizer (remove trailing inline file/source lines)
 # -----------------------------
 def strip_inline_source_suffix(s: str) -> str:
     if not s:
         return s
     lines = s.rstrip().splitlines()
+    # Remove one or more trailing lines like:
+    # "[1] FILE: foo.pdf", "FILE: foo", "Source: foo"
     while lines and re.match(r'^(?:\[\d+\]\s*)?(?:file|source)\s*:\s*.+$', lines[-1].strip(), re.IGNORECASE):
         lines.pop()
     return "\n".join(lines).rstrip()
 
 # -----------------------------
-# Auth utilities
+# Error handlers
+# -----------------------------
+@app.errorhandler(404)
+def not_found(_):
+    return render_template("login.html"), 404
+
+@app.errorhandler(500)
+def server_error(_):
+    flash("An unexpected error occurred. Please try again.", "error")
+    return render_template("login.html"), 500
+
+# -----------------------------
+# Auth utilities + context processor
 # -----------------------------
 def current_user():
     uid = session.get("user_id")
@@ -414,7 +479,6 @@ def require_company_owner(company_id: int):
     company = Company.query.get_or_404(company_id)
     return (company.owner_id == user.id) or (user.username == "admin")
 
-# 👇 Add this block right after your existing helpers
 @app.context_processor
 def inject_user():
     """
@@ -427,19 +491,6 @@ def inject_user():
         "is_admin": bool(user_obj and getattr(user_obj, "username", None) == "admin"),
         "must_reset_password": bool(user_obj and getattr(user_obj, "must_reset_password", False)),
     }
-
-
-# -----------------------------
-# Errors
-# -----------------------------
-@app.errorhandler(404)
-def not_found(_):
-    return render_template("login.html"), 404
-
-@app.errorhandler(500)
-def server_error(_):
-    flash("An unexpected error occurred. Please try again.", "error")
-    return render_template("login.html"), 500
 
 # -----------------------------
 # Routes: Auth
@@ -458,6 +509,9 @@ def login():
 
             if user and user.check_password(password):
                 session["user_id"] = user.id
+                if getattr(user, "must_reset_password", False):
+                    flash("Please set a new password to continue.", "error")
+                    return redirect(url_for("change_password"))
                 return redirect(url_for("dashboard"))
 
             flash("Invalid username/email or password", "error")
@@ -521,13 +575,87 @@ def signup():
         flash("Sign up failed. Please try again.", "error")
         return render_template("signup.html"), 500
 
+@app.route("/change_password", methods=["GET", "POST"])
+def change_password():
+    # require login
+    if "user_id" not in session:
+        return redirect(url_for("login"))
+
+    user = current_user()
+    if request.method == "POST":
+        current = request.form.get("current_password", "")
+        new = request.form.get("new_password", "")
+        confirm = request.form.get("confirm_password", "")
+
+        # If must_reset_password is true, you can skip requiring current password;
+        # here we keep it simple and require it always for now.
+        if not user.check_password(current):
+            flash("Current password is incorrect.", "error")
+            return render_template("change_password.html")
+
+        if len(new) < 8:
+            flash("New password must be at least 8 characters.", "error")
+            return render_template("change_password.html")
+
+        if new != confirm:
+            flash("Passwords do not match.", "error")
+            return render_template("change_password.html")
+
+        # save
+        user.password_hash = generate_password_hash(new, method="pbkdf2:sha256", salt_length=16)
+        if hasattr(user, "must_reset_password"):
+            user.must_reset_password = False
+        db.session.add(user)
+        db.session.commit()
+
+        flash("Password updated successfully.", "success")
+        return redirect(url_for("dashboard"))
+
+    # GET
+    return render_template("change_password.html")
+
 @app.route("/logout")
 def logout():
     session.pop("user_id", None)
     return redirect(url_for("login"))
 
 # -----------------------------
-# Routes: App
+# Routes: Admin
+# -----------------------------
+def _require_admin():
+    u = current_user()
+    return bool(u and u.username == "admin")
+
+@app.route("/admin/users", methods=["GET"])
+def admin_users():
+    if not _require_admin():
+        flash("Forbidden", "error")
+        return redirect(url_for("dashboard"))
+    users = User.query.order_by(asc(User.username)).all()
+    return render_template("admin_users.html", users=users)
+
+@app.route("/admin/reset_password/<int:user_id>", methods=["POST"])
+def admin_reset_password(user_id: int):
+    if not _require_admin():
+        flash("Forbidden", "error")
+        return redirect(url_for("dashboard"))
+
+    me = current_user()
+    if me and me.id == user_id:
+        flash("Use your own change-password page for your account.", "error")
+        return redirect(url_for("admin_users"))
+
+    user = User.query.get_or_404(user_id)
+    user.password_hash = generate_password_hash("Temp1234", method="pbkdf2:sha256", salt_length=16)
+    if hasattr(user, "must_reset_password"):
+        user.must_reset_password = True
+    db.session.add(user)
+    db.session.commit()
+    flash(f"Password for '{user.username}' reset to Temp1234.", "success")
+    return redirect(url_for("admin_users"))
+
+# -----------------------------
+# Routes: App (dashboard/companies/agent)
 # -----------------------------
 @app.route("/dashboard", methods=["GET", "POST"])
 def dashboard():
@@ -553,29 +681,28 @@ def dashboard():
         else:
             companies = Company.query.filter_by(owner_id=user.id).order_by(Company.created_at.desc()).all()
 
-        # 👇 THIS is the line you add (instead of the old render_template)
-        return render_template("dashboard.html", companies=companies, user=user)
+        return render_template("dashboard.html", companies=companies)
     except Exception as e:
         app.logger.error(f"Dashboard error: {e}")
         flash("Failed to load dashboard.", "error")
-        return render_template("dashboard.html", companies=[], user=current_user()), 500
+        return render_template("dashboard.html", companies=[]), 500
 
 @app.route("/delete_company/<int:company_id>")
 def delete_company(company_id: int):
     if "user_id" not in session:
         return redirect(url_for("login"))
     try:
-        if not require_company_owner(company_id):
-            abort(403)
-
-        # Best-effort cleanup of related rows
         try:
             db.session.execute(text("DELETE FROM knowledge WHERE company_id = :cid"), {"cid": company_id})
         except Exception:
             pass
-
         CompanyData.query.filter_by(company_id=company_id).delete()
         company = Company.query.get_or_404(company_id)
+        # Only owners or admin can delete
+        user = current_user()
+        if not ((company.owner_id == (user.id if user else None)) or (user and user.username == "admin")):
+            flash("Forbidden", "error")
+            return redirect(url_for("dashboard"))
         db.session.delete(company)
         db.session.commit()
         flash("Company deleted", "success")
@@ -589,10 +716,13 @@ def manage(company_id: int):
     if "user_id" not in session:
         return redirect(url_for("login"))
     try:
-        if not require_company_owner(company_id):
-            abort(403)
-
         company = Company.query.get_or_404(company_id)
+
+        # Only owners or admin can manage
+        user = current_user()
+        if not ((company.owner_id == (user.id if user else None)) or (user and user.username == "admin")):
+            flash("Forbidden", "error")
+            return redirect(url_for("dashboard"))
 
         if request.method == "POST":
             file = request.files.get("file")
@@ -625,10 +755,13 @@ def reingest(company_id: int):
     if "user_id" not in session:
         return redirect(url_for("login"))
     try:
-        if not require_company_owner(company_id):
-            abort(403)
-
         company = Company.query.get_or_404(company_id)
+        # Only owners or admin can reingest
+        user = current_user()
+        if not ((company.owner_id == (user.id if user else None)) or (user and user.username == "admin")):
+            flash("Forbidden", "error")
+            return redirect(url_for("dashboard"))
+
         items = CompanyData.query.filter_by(company_id=company.id).all()
         for it in items:
             ingest_entry(it)
@@ -645,10 +778,15 @@ def delete_entry(entry_id: int):
         return redirect(url_for("login"))
     try:
         entry = CompanyData.query.get_or_404(entry_id)
-        if not require_company_owner(entry.company_id):
-            abort(403)
-
         company_id = entry.company_id
+
+        # Only owners or admin can delete entries
+        company = Company.query.get_or_404(company_id)
+        user = current_user()
+        if not ((company.owner_id == (user.id if user else None)) or (user and user.username == "admin")):
+            flash("Forbidden", "error")
+            return redirect(url_for("dashboard"))
+
         if entry.filename:
             try:
                 path = os.path.join(app.config["UPLOAD_FOLDER"], entry.filename)
@@ -670,9 +808,14 @@ def agent(company_id: int):
     if "user_id" not in session:
         return redirect(url_for("login"))
     try:
-        if not require_company_owner(company_id):
-            abort(403)
         company = Company.query.get_or_404(company_id)
+
+        # Only owners or admin can view agent
+        user = current_user()
+        if not ((company.owner_id == (user.id if user else None)) or (user and user.username == "admin")):
+            flash("Forbidden", "error")
+            return redirect(url_for("dashboard"))
+
         return render_template("agent.html", company=company)
     except Exception as e:
         app.logger.error(f"Agent route error: {e}")
@@ -695,16 +838,12 @@ def agent_api():
         if not user_message:
             return jsonify({"answer": "No input received"})
 
-        # authz
-        if not require_company_owner(company_id):
-            return jsonify({"error": "Forbidden"}), 403
-
         client = get_openai_client()
 
         # Build retrieval context (filenames + snippets)
         snippets = []
         if company_id:
-            # lazy ensure FTS infra is present
+            # ensure FTS infra is present
             ensure_fulltext_indexes()
             snippets = get_context_snippets(user_message, company_id)
 
@@ -722,6 +861,7 @@ def agent_api():
         )
 
         text_out = (resp.choices[0].message.content or "").strip()
+        # Safety net: strip any trailing inline "FILE: ..." / "Source: ..." lines
         text_out = strip_inline_source_suffix(text_out)
 
         return jsonify({"answer": text_out, "sources": snippets})
@@ -739,8 +879,13 @@ def ingest_single(entry_id: int):
         return redirect(url_for("login"))
     try:
         entry = CompanyData.query.get_or_404(entry_id)
-        if not require_company_owner(entry.company_id):
-            abort(403)
+
+        # Only owners or admin can reingest single entry
+        company = Company.query.get_or_404(entry.company_id)
+        user = current_user()
+        if not ((company.owner_id == (user.id if user else None)) or (user and user.username == "admin")):
+            flash("Forbidden", "error")
+            return redirect(url_for("dashboard"))
 
         ingest_entry(entry)
         db.session.commit()
@@ -757,9 +902,9 @@ def ingest_single(entry_id: int):
 with app.app_context():
     check_database()
     db.create_all()
-    # safe to call repeatedly; creates/refreshes FTS infra
-    ensure_fulltext_indexes()
-    create_default_admin()
+    ensure_schema_upgrades()   # ensure columns/indexes/FK exist
+    ensure_fulltext_indexes()  # FTS infra
+    create_default_admin()     # safe if already present
 
 if __name__ == "__main__":
     # On Render, use: gunicorn app:app
