@@ -51,7 +51,7 @@
               <td class="px-4 py-3">
                 <form method="POST" action="{{ url_for('admin_reset_password', user_id=u.id) }}"
                       onsubmit="return confirm('Reset password for {{ u.username }} to Temp1234?')">
-                  <!-- If you add CSRF later: {{ form.csrf_token }} -->
+                  {# If you add Flask-WTF later: {{ form.csrf_token }} #}
                   <button class="px-3 py-1.5 rounded bg-gray-900 text-white hover:bg-gray-800">
                     Reset to Temp1234
                   </button>
@@ -63,7 +63,7 @@
         </table>
       </div>
       <div class="p-3 text-xs text-gray-500 border-t bg-gray-50">
-        Tip: After resetting, the user will be required to set a new password on next login.
+        Tip: After resetting, the user must set a new password on next login.
       </div>
     </div>
   </div>

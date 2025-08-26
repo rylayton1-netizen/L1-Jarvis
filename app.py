@@ -414,6 +414,21 @@ def require_company_owner(company_id: int):
     company = Company.query.get_or_404(company_id)
     return (company.owner_id == user.id) or (user.username == "admin")
 
+# 👇 Add this block right after your existing helpers
+@app.context_processor
+def inject_user():
+    """
+    Make `current_user`, `is_admin`, and `must_reset_password`
+    available in ALL templates automatically.
+    """
+    user_obj = current_user()
+    return {
+        "current_user": user_obj,
+        "is_admin": bool(user_obj and getattr(user_obj, "username", None) == "admin"),
+        "must_reset_password": bool(user_obj and getattr(user_obj, "must_reset_password", False)),
+    }
+
+
 # -----------------------------
 # Errors
 # -----------------------------

@@ -12,7 +12,7 @@
     <div class="max-w-5xl mx-auto px-4 py-3 flex items-center justify-between">
       <div class="flex items-center gap-2 font-semibold">L1 AI Assistants</div>
       <nav class="flex items-center gap-4 text-sm">
-        {% if user and user.username == 'admin' %}
+        {% if is_admin %}
           <a href="{{ url_for('admin_users') }}" class="hover:underline">Admin: Manage Users</a>
         {% endif %}
         <a href="{{ url_for('logout') }}" class="hover:underline">Logout</a>
@@ -21,7 +21,7 @@
   </header>
 
   <main class="max-w-5xl mx-auto p-4">
-    {% if user and hasattr(user, 'must_reset_password') and user.must_reset_password %}
+    {% if must_reset_password %}
       <div class="bg-yellow-50 border border-yellow-200 text-yellow-900 px-3 py-2 rounded mb-3 text-sm">
         Your password was reset by an admin. Please
         <a class="underline font-medium" href="{{ url_for('change_password') }}">set a new password</a>.

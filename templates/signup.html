@@ -30,7 +30,7 @@
         {% endif %}
       {% endwith %}
 
-      <form method="POST" class="space-y-3">
+      <form method="POST" class="space-y-3" action="{{ url_for('signup') }}">
         <div>
           <label class="block text-sm text-gray-600 mb-1">Company name</label>
           <input class="w-full border rounded px-3 py-2" type="text" name="company_name" required
@@ -44,8 +44,8 @@
                    value="{{ (preset.username if preset else '') }}"/>
           </div>
           <div>
-            <label class="block text-sm text-gray-600 mb-1">Email</label>
-            <input class="w-full border rounded px-3 py-2" type="email" name="email" autocomplete="email" required
+            <label class="block text-sm text-gray-600 mb-1">Email (optional)</label>
+            <input class="w-full border rounded px-3 py-2" type="email" name="email" autocomplete="email"
                    value="{{ (preset.email if preset else '') }}"/>
           </div>
         </div>
@@ -54,13 +54,15 @@
           <div>
             <label class="block text-sm text-gray-600 mb-1">Password</label>
             <input class="w-full border rounded px-3 py-2" type="password" name="password" autocomplete="new-password" required/>
-            <p class="text-xs text-gray-500 mt-1">Use 8+ chars with a mix of letters & numbers.</p>
+            <p class="text-xs text-gray-500 mt-1">Use 8+ characters.</p>
           </div>
           <div>
             <label class="block text-sm text-gray-600 mb-1">Confirm password</label>
             <input class="w-full border rounded px-3 py-2" type="password" name="confirm" autocomplete="new-password" required/>
           </div>
         </div>
+
+        {# If you add Flask-WTF later: {{ form.csrf_token }} #}
 
         <button class="w-full bg-gray-900 text-white px-4 py-2 rounded hover:bg-gray-800">
           Create account
