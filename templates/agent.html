@@ -12,6 +12,16 @@
     .typing .dot:nth-child(3){ animation-delay:.4s; }
     @keyframes blink{0%,80%,100%{opacity:.2;transform:translateY(0)}40%{opacity:1;transform:translateY(-2px)}}
     #chat-box::-webkit-scrollbar { width: 8px; } #chat-box::-webkit-scrollbar-thumb { background:#E5E7EB;border-radius:9999px } #chat-box:hover::-webkit-scrollbar-thumb{background:#D1D5DB}
+    /* Sliding toggle */
+    .switch { position: relative; display: inline-block; width: 42px; height: 24px; }
+    .switch input { opacity: 0; width: 0; height: 0; }
+    .slider { position: absolute; inset: 0; background: #e5e7eb; border-radius: 9999px; transition: .2s; }
+    .slider:before { content: ""; position: absolute; height: 20px; width: 20px; left: 2px; top: 2px;
+    background: #fff; border-radius: 9999px; transition: .2s; box-shadow: 0 1px 2px rgba(0,0,0,.2); }
+    .switch input:checked + .slider { background: #111827; }            /* gray-900 when ON */
+    .switch input:checked + .slider:before { transform: translateX(18px); }
+    .switch:focus-within .slider { box-shadow: 0 0 0 2px rgba(17,24,39,.2); }
+
   </style>
 </head>
 <body class="bg-gray-100">
@@ -22,13 +32,14 @@
         <h1 class="text-lg md:text-xl font-semibold text-gray-900">{{ company.name }}</h1>
       </div>
       <!-- Right side: Company ID + Show sources toggle -->
-      <div class="hidden md:flex items-center space-x-4">
-        <div class="text-xs px-3 py-1 border rounded-full text-gray-500">Company ID: {{ company.id }}</div>
-        <label class="flex items-center space-x-2 cursor-pointer select-none">
-          <span class="text-xs text-gray-600">Show sources</span>
-          <input id="toggle-sources" type="checkbox" class="h-4 w-4">
+      <div class="flex items-center space-x-2 select-none">
+        <span class="text-xs text-gray-600">Show sources</span>
+        <label class="switch">
+          <input id="toggle-sources" type="checkbox">
+          <span class="slider"></span>
         </label>
       </div>
+
     </header>
 
     <section id="chat-box" class="flex-1 overflow-y-auto px-3 md:px-6 py-4 md:py-6 space-y-4"></section>
@@ -119,7 +130,9 @@
           body:JSON.stringify({message})
         });
         const data=await res.json();
-        const answerSafe = nl2br(escapeHtml((data && data.answer) || ''));
+        const rawAnswer = (data && data.answer) || '';
+        const cleaned = stripInlineSourceSuffix(rawAnswer);
+        const answerSafe = nl2br(escapeHtml(cleaned));
         thinkingBubble.innerHTML = answerSafe;
         // render compact dropdown for sources
         if(data && Array.isArray(data.sources)){
