@@ -23,11 +23,15 @@ from openai import OpenAI
 
 # Optional fallback for tougher PDFs
 try:
-    from pdfminer.high_level import extract_text as pdfminer_extract_text
-    from pdfminer.layout import LAParams
-    HAVE_PDFMINER = True
+    from pdfminer_high_level import extract_text as pdfminer_extract_text  # type: ignore
 except Exception:
-    HAVE_PDFMINER = False
+    try:
+        # Some environments install as pdfminer.high_level
+        from pdfminer.high_level import extract_text as pdfminer_extract_text  # type: ignore
+    except Exception:
+        pdfminer_extract_text = None
+
+HAVE_PDFMINER = pdfminer_extract_text is not None
 
 # -----------------------------
 # Load environment variables
@@ -174,14 +178,15 @@ SYSTEM_GUARDRAILS = """You are a call-center assistant constrained to the provid
 Rules:
 - Answer ONLY using the snippets provided.
 - If information is insufficient, reply exactly: "I don’t know based on the documents I have."
-- When citing, list the exact filenames returned by retrieval; do NOT invent filenames.
+- Do NOT include filenames, (File: ...), (Source: ...), bracketed citations like [1], or any citation markers in the answer text. The UI will show sources separately.
 - Keep answers concise and actionable for agents.
 """
 
 def build_user_prompt(question: str, snippets: List[dict]) -> str:
+    # We still show filenames to the model for grounding, but we do NOT ask it to print them.
     lines = []
     for i, s in enumerate(snippets, start=1):
-        lines.append(f"[{i}] FILE: {s['filename']}\nSNIPPET: {s['snippet']}\n")
+        lines.append(f"FILE: {s['filename']}\nSNIPPET: {s['snippet']}\n")
     context_block = "\n".join(lines) if lines else "(no context)"
     return f"""Question: {question}
 
@@ -190,7 +195,7 @@ Context snippets:
 
 Instructions:
 - Use only the context above.
-- Cite filenames like [1] FILE: <name> at the end of the answer when relevant.
+- Do not include filenames or citation markers in your answer. Return only the answer text.
 """
 
 # -----------------------------
@@ -233,7 +238,7 @@ def extract_text_from_pdf(path: str, max_chars: int = 50_000) -> str:
     Try PyPDF2 first; if we get too little text (scanned PDF or tricky layout),
     fall back to pdfminer.six which is more robust for text extraction.
     """
-    text = ""
+    text_val = ""
     # Attempt 1: PyPDF2
     try:
         reader = PdfReader(path)
@@ -247,22 +252,20 @@ def extract_text_from_pdf(path: str, max_chars: int = 50_000) -> str:
                 chunks.append(t)
             if sum(len(c) for c in chunks) >= max_chars:
                 break
-        text = _condense_ws(" ".join(chunks))[:max_chars]
+        text_val = _condense_ws(" ".join(chunks))[:max_chars]
     except Exception as e:
         app.logger.warning(f"PyPDF2 failed for {path}: {e}")
 
     # Fallback: pdfminer if installed and PyPDF2 result small
-    if len(text) < 50 and HAVE_PDFMINER:
+    if len(text_val) < 50 and HAVE_PDFMINER:
         try:
-            laparams = LAParams()
-            mined = pdfminer_extract_text(path, laparams=laparams) or ""
-            text = _condense_ws(mined)[:max_chars]
-            app.logger.info(f"pdfminer extracted {len(text)} chars from {os.path.basename(path)}")
+            mined = pdfminer_extract_text(path) or ""  # type: ignore
+            text_val = _condense_ws(mined)[:max_chars]
+            app.logger.info(f"pdfminer extracted {len(text_val)} chars from {os.path.basename(path)}")
         except Exception as e:
             app.logger.error(f"pdfminer failed for {path}: {e}")
-            text = text  # keep whatever we had (likely empty)
 
-    return text
+    return text_val
 
 def fetch_url_text(url: str, max_chars: int = 50_000) -> str:
     try:
@@ -276,8 +279,8 @@ def fetch_url_text(url: str, max_chars: int = 50_000) -> str:
         soup = BeautifulSoup(r.text, "html.parser")
         for tag in soup(["script", "style"]):
             tag.decompose()
-        text = soup.get_text(separator=" ")
-        out = _condense_ws(text)[:max_chars]
+        text_val = soup.get_text(separator=" ")
+        out = _condense_ws(text_val)[:max_chars]
         app.logger.info(f"Fetched {len(out)} chars from {url}")
         return out
     except Exception as e:
@@ -321,7 +324,7 @@ def ingest_entry(entry: CompanyData):
                     f"{entry.name_or_url or entry.filename}: {len(text_val)} chars")
 
 # -----------------------------
-# Full‑text bootstrap (safe to run)
+# Full-text bootstrap (safe to run)
 # -----------------------------
 def ensure_fulltext_indexes():
     """Create tsvector column/index + triggers (idempotent)."""
@@ -360,6 +363,19 @@ def ensure_fulltext_indexes():
     """
     with db.engine.begin() as conn:
         conn.execute(text(sql))
+
+# -----------------------------
+# Answer sanitizer (remove trailing inline file/source lines)
+# -----------------------------
+def strip_inline_source_suffix(s: str) -> str:
+    if not s:
+        return s
+    lines = s.rstrip().splitlines()
+    # Remove one or more trailing lines like:
+    # "[1] FILE: foo.pdf", "FILE: foo", "Source: foo"
+    while lines and re.match(r'^(?:\[\d+\]\s*)?(?:file|source)\s*:\s*.+$', lines[-1].strip(), re.IGNORECASE):
+        lines.pop()
+    return "\n".join(lines).rstrip()
 
 # -----------------------------
 # Errors
@@ -562,7 +578,10 @@ def agent_api():
             temperature=0.2,
         )
 
-        text_out = resp.choices[0].message.content.strip()
+        text_out = (resp.choices[0].message.content or "").strip()
+        # Safety net: strip any trailing inline "FILE: ..." / "Source: ..." lines
+        text_out = strip_inline_source_suffix(text_out)
+
         return jsonify({"answer": text_out, "sources": snippets})
     except Exception as e:
         app.logger.error(f"Agent API error: {e}")
@@ -580,11 +599,11 @@ def ingest_single(entry_id: int):
         entry = CompanyData.query.get_or_404(entry_id)
         ingest_entry(entry)
         db.session.commit()
-        flash(f"Re‑ingested entry {entry_id}", "success")
+        flash(f"Re-ingested entry {entry_id}", "success")
         return redirect(url_for("manage", company_id=entry.company_id))
     except Exception as e:
         app.logger.error(f"Single reingest error: {e}")
-        flash("Failed to re‑ingest entry.", "error")
+        flash("Failed to re-ingest entry.", "error")
         return redirect(url_for("dashboard"))
 
 
@@ -594,9 +613,9 @@ def ingest_single(entry_id: int):
 with app.app_context():
     check_database()
     db.create_all()
-    create_default_admin()
     # safe to call repeatedly; creates/refreshes FTS infra
     ensure_fulltext_indexes()
+    create_default_admin()
 
 if __name__ == "__main__":
     # On Render, use: gunicorn app:app
