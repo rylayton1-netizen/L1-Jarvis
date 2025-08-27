@@ -12,16 +12,13 @@
     .typing .dot:nth-child(3){ animation-delay:.4s; }
     @keyframes blink{0%,80%,100%{opacity:.2;transform:translateY(0)}40%{opacity:1;transform:translateY(-2px)}}
     #chat-box::-webkit-scrollbar { width: 8px; } #chat-box::-webkit-scrollbar-thumb { background:#E5E7EB;border-radius:9999px } #chat-box:hover::-webkit-scrollbar-thumb{background:#D1D5DB}
-    /* Sliding toggle */
     .switch { position: relative; display: inline-block; width: 42px; height: 24px; }
     .switch input { opacity: 0; width: 0; height: 0; }
     .slider { position: absolute; inset: 0; background: #e5e7eb; border-radius: 9999px; transition: .2s; }
-    .slider:before { content: ""; position: absolute; height: 20px; width: 20px; left: 2px; top: 2px;
-    background: #fff; border-radius: 9999px; transition: .2s; box-shadow: 0 1px 2px rgba(0,0,0,.2); }
-    .switch input:checked + .slider { background: #111827; }            /* gray-900 when ON */
+    .slider:before { content: ""; position: absolute; height: 20px; width: 20px; left: 2px; top: 2px; background: #fff; border-radius: 9999px; transition: .2s; box-shadow: 0 1px 2px rgba(0,0,0,.2); }
+    .switch input:checked + .slider { background: #111827; }
     .switch input:checked + .slider:before { transform: translateX(18px); }
     .switch:focus-within .slider { box-shadow: 0 0 0 2px rgba(17,24,39,.2); }
-
   </style>
 </head>
 <body class="bg-gray-100">
@@ -31,7 +28,6 @@
         <div class="w-8 h-8 rounded-xl bg-gray-900 text-white flex items-center justify-center font-bold">L1</div>
         <h1 class="text-lg md:text-xl font-semibold text-gray-900">{{ company.name }}</h1>
       </div>
-      <!-- Right side: Company ID + Show sources toggle -->
       <div class="flex items-center space-x-2 select-none">
         <span class="text-xs text-gray-600">Show sources</span>
         <label class="switch">
@@ -39,7 +35,6 @@
           <span class="slider"></span>
         </label>
       </div>
-
     </header>
 
     <section id="chat-box" class="flex-1 overflow-y-auto px-3 md:px-6 py-4 md:py-6 space-y-4"></section>
@@ -84,9 +79,20 @@
       wrap.appendChild(bubble); chatBox.appendChild(wrap); scrollToBottom(); return bubble;
     }
 
-    // Renders a single dropdown bar labeled "Sources (N)" with filenames & snippets inside
+    // JS version of the Python helper
+    function stripInlineSourceSuffix(s){
+      if(!s) return s;
+      const lines = s.replace(/\s+$/,'').split(/\r?\n/);
+      const tailRe = /^(?:\[\d+\]\s*)?(?:file|source)\s*:\s*.*/i;
+      while(lines.length && tailRe.test(lines[lines.length-1].trim())){
+        lines.pop();
+      }
+      return lines.join('\n').replace(/\s+$/,'');
+    }
+
+    // Renders a dropdown labeled "Sources (N)" with filenames & snippets
     function renderSourcesDropdown(bubble, sources){
-      if(!showSources) return; // <-- Toggle gate
+      if(!showSources) return;
       if(!Array.isArray(sources) || sources.length===0) return;
 
       const details=document.createElement('details');
@@ -129,16 +135,32 @@
           headers:{'Content-Type':'application/json'},
           body:JSON.stringify({message})
         });
+
+        // Ensure JSON content-type; otherwise, show a clearer error
+        const ct = res.headers.get('content-type') || '';
+        if (!ct.includes('application/json')) {
+          const txt = await res.text();
+          console.error('Non-JSON from agent_api:', txt);
+          throw new Error('Non-JSON response');
+        }
+
         const data=await res.json();
+
+        if(!res.ok){
+          console.error('agent_api error:', data?.error || data);
+          throw new Error(data?.error || 'Request failed');
+        }
+
         const rawAnswer = (data && data.answer) || '';
         const cleaned = stripInlineSourceSuffix(rawAnswer);
         const answerSafe = nl2br(escapeHtml(cleaned));
         thinkingBubble.innerHTML = answerSafe;
-        // render compact dropdown for sources
-        if(data && Array.isArray(data.sources)){
-          renderSourcesDropdown(thinkingBubble, data.sources);
-        }
+
+        const sources = Array.isArray(data?.sources) ? data.sources : [];
+        renderSourcesDropdown(thinkingBubble, sources);
+
       }catch(e){
+        console.error(e);
         thinkingBubble.innerHTML='<span class="text-red-600">Sorry, something went wrong.</span>';
       }finally{
         inputEl.disabled=false; sendBtn.disabled=false; inputEl.focus(); isSending=false; scrollToBottom();
@@ -149,9 +171,8 @@
     inputEl.addEventListener('keydown', e=>{ if(e.key==='Enter'&&!e.shiftKey){e.preventDefault();sendMessage()} });
     inputEl.addEventListener('input', autoResize);
 
-    // Initialize toggle + textarea sizing on load
     window.addEventListener('load', ()=>{
-      inputEl.focus(); 
+      inputEl.focus();
       autoResize();
 
       if (toggleEl) {

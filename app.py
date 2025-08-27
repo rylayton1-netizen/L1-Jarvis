@@ -822,7 +822,7 @@ def agent(company_id: int):
         flash("Failed to load agent page.", "error")
         return redirect(url_for("dashboard"))
 
-@app.route("/agent_api", methods=["POST"])
+@app.post("/agent_api")
 def agent_api():
     """
     Answers a question for a given company_id by:
@@ -830,22 +830,27 @@ def agent_api():
     2) Calling the LLM with strict guardrails to prevent wrong citations
     """
     if "user_id" not in session:
-        return jsonify({"error": "Unauthorized"}), 401
+        return jsonify({"answer": None, "sources": [], "error": "unauthorized"}), 401
     try:
+        # Accept both JSON and form
         data = request.get_json(silent=True) or {}
+        if not data and request.form:
+            data = request.form.to_dict()
+
         user_message = (data.get("message") or "").strip()
         company_id = int(request.args.get("company_id", "0") or 0)
+
         if not user_message:
-            return jsonify({"answer": "No input received"})
+            payload = {"answer": None, "sources": [], "error": "no_input"}
+            # Optional: log what came in to catch empty bodies quickly
+            app.logger.info("agent_api: empty user_message; sending %s", payload)
+            return jsonify(payload), 400
 
         client = get_openai_client()
 
         # Build retrieval context (filenames + snippets)
-        snippets = []
-        if company_id:
-            # ensure FTS infra is present
-            ensure_fulltext_indexes()
-            snippets = get_context_snippets(user_message, company_id)
+        ensure_fulltext_indexes()
+        snippets = get_context_snippets(user_message, company_id) if company_id else []
 
         # Guardrails + prompt
         user_prompt = build_user_prompt(user_message, snippets)
@@ -861,13 +866,18 @@ def agent_api():
         )
 
         text_out = (resp.choices[0].message.content or "").strip()
-        # Safety net: strip any trailing inline "FILE: ..." / "Source: ..." lines
         text_out = strip_inline_source_suffix(text_out)
 
-        return jsonify({"answer": text_out, "sources": snippets})
+        payload = {"answer": text_out, "sources": snippets, "error": None}
+        # Log a short preview so you can confirm schema in logs
+        app.logger.info("agent_api OK (len=%d): %s",
+                        len((text_out or "")), str({**payload, "answer": (text_out[:120] + ("…" if len(text_out) > 120 else ""))}))
+        return jsonify(payload), 200
+
     except Exception as e:
-        app.logger.error(f"Agent API error: {e}")
-        return jsonify({"answer": f"Error: {str(e)}"}), 500
+        app.logger.exception("Agent API error")
+        return jsonify({"answer": None, "sources": [], "error": str(e)}), 500
+
 
 @app.route("/health")
 def health():
