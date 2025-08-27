@@ -19,6 +19,13 @@
     .switch input:checked + .slider { background: #111827; }
     .switch input:checked + .slider:before { transform: translateX(18px); }
     .switch:focus-within .slider { box-shadow: 0 0 0 2px rgba(17,24,39,.2); }
+
+    /* Source list niceties */
+    .src-domain { font-size: 11px; color: #6B7280; }
+    .src-quote { font-size: 12px; color: #374151; background: #F9FAFB; border-left: 3px solid #E5E7EB; padding: .5rem .75rem; border-radius: .375rem; }
+    .src-meta { font-size: 11px; color: #6B7280; }
+    .src-link { color:#111827; text-decoration:underline; }
+    .badge { font-size: 10px; background:#F3F4F6; border:1px solid #E5E7EB; color:#4B5563; border-radius:9999px; padding:2px 6px; }
   </style>
 </head>
 <body class="bg-gray-100">
@@ -79,7 +86,7 @@
       wrap.appendChild(bubble); chatBox.appendChild(wrap); scrollToBottom(); return bubble;
     }
 
-    // JS version of the Python helper
+    // Removes any inline "Source: ..." tails some models append
     function stripInlineSourceSuffix(s){
       if(!s) return s;
       const lines = s.replace(/\s+$/,'').split(/\r?\n/);
@@ -90,7 +97,65 @@
       return lines.join('\n').replace(/\s+$/,'');
     }
 
-    // Renders a dropdown labeled "Sources (N)" with filenames & snippets
+    function domainFromUrl(url){
+      try{ return new URL(url).hostname.replace(/^www\./,''); }catch{ return ''; }
+    }
+
+    // Build one source card with title/filename, clickable URL, and a verbatim quote/snippet
+    function buildSourceItem(s, index){
+      const item=document.createElement('div');
+      item.className='p-2 bg-white border rounded-lg';
+
+      const title = s.title || s.filename || s.name || '(untitled)';
+      const url = s.url || s.link || '';
+      const domain = url ? domainFromUrl(url) : '';
+      const quote = s.quote || s.excerpt || s.snippet || '';
+      const location = s.location || s.loc || null; // e.g., page/line info if your backend provides it
+
+      // header line
+      const head=document.createElement('div');
+      head.className='text-sm font-medium text-gray-800 flex items-center gap-2';
+      const label=document.createElement('span');
+      label.textContent = `[${index+1}] ${title}`;
+      head.appendChild(label);
+
+      if (url){
+        const link=document.createElement('a');
+        link.href=url; link.target='_blank'; link.rel='noopener noreferrer';
+        link.className='badge src-meta';
+        link.textContent='Open';
+        head.appendChild(link);
+      }
+      item.appendChild(head);
+
+      // domain + optional location
+      if (domain || location){
+        const meta=document.createElement('div');
+        meta.className='mt-1 src-domain';
+        meta.textContent = [domain, location ? `• ${location}` : ''].filter(Boolean).join(' ');
+        item.appendChild(meta);
+      }
+
+      // exact quote block (fallback to snippet)
+      if (quote){
+        const qb=document.createElement('blockquote');
+        qb.className='mt-2 src-quote';
+        qb.innerHTML=nl2br(escapeHtml(quote));
+        item.appendChild(qb);
+      }
+
+      // raw URL line for transparency (optional)
+      if (url){
+        const rawUrl=document.createElement('div');
+        rawUrl.className='mt-2 src-meta break-all';
+        rawUrl.innerHTML = `<a class="src-link" href="${escapeHtml(url)}" target="_blank" rel="noopener noreferrer">${escapeHtml(url)}</a>`;
+        item.appendChild(rawUrl);
+      }
+
+      return item;
+    }
+
+    // Renders a dropdown labeled "Sources (N)" with clickable links and verbatim quotes
     function renderSourcesDropdown(bubble, sources){
       if(!showSources) return;
       if(!Array.isArray(sources) || sources.length===0) return;
@@ -106,17 +171,7 @@
       list.className='px-3 pb-3 space-y-2';
 
       sources.forEach((s, i)=>{
-        const item=document.createElement('div');
-        item.className='p-2 bg-white border rounded-lg';
-        const name=document.createElement('div');
-        name.className='text-sm font-medium text-gray-800';
-        name.textContent=`[${i+1}] ${s.filename || '(no filename)'}`;
-        const snip=document.createElement('div');
-        snip.className='mt-1 text-xs text-gray-600';
-        snip.innerHTML=nl2br(escapeHtml(s.snippet || ''));
-        item.appendChild(name);
-        item.appendChild(snip);
-        list.appendChild(item);
+        list.appendChild(buildSourceItem(s, i));
       });
 
       details.appendChild(list);
@@ -133,10 +188,10 @@
         const res=await fetch(`{{ url_for("agent_api") }}?company_id={{ company.id }}`,{
           method:'POST',
           headers:{'Content-Type':'application/json'},
-          body:JSON.stringify({message})
+          // optionally pass the user's preference to your backend if you want server-side control
+          body:JSON.stringify({message, show_sources: !!showSources})
         });
 
-        // Ensure JSON content-type; otherwise, show a clearer error
         const ct = res.headers.get('content-type') || '';
         if (!ct.includes('application/json')) {
           const txt = await res.text();
@@ -156,6 +211,8 @@
         const answerSafe = nl2br(escapeHtml(cleaned));
         thinkingBubble.innerHTML = answerSafe;
 
+        // Expecting sources like:
+        // [{ title, filename, url, quote, snippet, location }, ...]
         const sources = Array.isArray(data?.sources) ? data.sources : [];
         renderSourcesDropdown(thinkingBubble, sources);
 
@@ -186,4 +243,3 @@
   </script>
 </body>
 </html>
-

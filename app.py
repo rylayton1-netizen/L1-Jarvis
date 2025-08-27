@@ -2,7 +2,7 @@ import os
 import re
 import logging
 from datetime import datetime
-from typing import List
+from typing import List, Optional
 
 from flask import (
     Flask, render_template, request, redirect, url_for,
@@ -21,12 +21,17 @@ from PyPDF2 import PdfReader
 # OpenAI SDK v1.x
 from openai import OpenAI
 
+# Register pgvector adapters for SQLAlchemy bindings (lists -> vector)
+try:
+    from pgvector.sqlalchemy import Vector  # noqa: F401
+except Exception:
+    Vector = None
+
 # Optional fallback for tougher PDFs
 try:
     from pdfminer_high_level import extract_text as pdfminer_extract_text  # type: ignore
 except Exception:
     try:
-        # Some environments install as pdfminer.high_level
         from pdfminer.high_level import extract_text as pdfminer_extract_text  # type: ignore
     except Exception:
         pdfminer_extract_text = None
@@ -50,7 +55,7 @@ def create_app():
     # Database URL
     raw_url = os.environ.get("DATABASE_URL", "sqlite:///l1_jarvis.db")
 
-    # Normalize Postgres URIs for SQLAlchemy + psycopg2 and require SSL on Render
+    # Normalize Postgres URIs for SQLAlchemy + psycopg2 and require SSL on Render/hosted
     db_url = raw_url
     if db_url.startswith("postgres://"):
         db_url = db_url.replace("postgres://", "postgresql://", 1)
@@ -60,7 +65,7 @@ def create_app():
     app.config["SQLALCHEMY_DATABASE_URI"] = db_url
     app.config["SQLALCHEMY_TRACK_MODIFICATIONS"] = False
 
-    # Force SSL for managed Postgres
+    # Force SSL for managed Postgres (no-op for sqlite)
     if db_url.startswith("postgresql+psycopg2://"):
         app.config["SQLALCHEMY_ENGINE_OPTIONS"] = {"connect_args": {"sslmode": "require"}}
 
@@ -92,11 +97,9 @@ class User(db.Model):
     email = db.Column(db.String(255), unique=True, nullable=True)
     password_hash = db.Column(db.String(255), nullable=False)
     created_at = db.Column(db.DateTime, default=datetime.utcnow)
-    # NOTE: column may be added later via ensure_schema_upgrades(); model allows attribute access
     must_reset_password = db.Column(db.Boolean, default=False, nullable=False)
 
     def set_password(self, password: str):
-        # PBKDF2 for maximum compatibility across envs
         self.password_hash = generate_password_hash(password, method="pbkdf2:sha256", salt_length=16)
 
     def check_password(self, password: str) -> bool:
@@ -108,7 +111,6 @@ class Company(db.Model):
     id = db.Column(db.Integer, primary_key=True)
     name = db.Column(db.String(150), unique=True, nullable=False)
     created_at = db.Column(db.DateTime, default=datetime.utcnow)
-    # Added by ensure_schema_upgrades() if missing
     owner_id = db.Column(db.Integer, db.ForeignKey("user.id"), nullable=True)
 
 
@@ -121,9 +123,9 @@ class CompanyData(db.Model):
     content = db.Column(db.Text)             # extracted text
     created_at = db.Column(db.DateTime, default=datetime.utcnow)
 
-# -----------------------------
-# Retrieval SQL (Step 4)
-# -----------------------------
+# ---------------------------------------------------------------------
+# (Legacy) FTS retrieval SQL used previously. Keeping for reference.
+# ---------------------------------------------------------------------
 RETRIEVAL_SQL = text("""
 WITH
 q AS (
@@ -177,7 +179,6 @@ LIMIT 8;
 """)
 
 def get_context_snippets(question: str, company_id: int):
-    """Run retrieval and return a list of dicts [{filename, snippet}, ...]."""
     with db.engine.begin() as conn:
         rows = conn.execute(RETRIEVAL_SQL, {"cid": company_id, "q": question}).fetchall()
     results = []
@@ -189,30 +190,109 @@ def get_context_snippets(question: str, company_id: int):
     return results
 
 # -----------------------------
-# Guardrails (Step 5)
+# Guardrails
 # -----------------------------
-SYSTEM_GUARDRAILS = """You are a call-center assistant constrained to the provided context snippets.
+SYSTEM_GUARDRAILS = """You are a call-center assistant constrained to the provided context.
 Rules:
-- Answer ONLY using the snippets provided.
-- If information is insufficient, reply exactly: "I don’t know based on the documents I have."
+- Answer ONLY using the provided context blocks.
+- If information is insufficient, reply exactly: "I don’t know based on the information I have."
 - Do NOT include filenames, (File: ...), (Source: ...), bracketed citations like [1], or any citation markers in the answer text. The UI will show sources separately.
 - Keep answers concise and actionable for agents.
 """
 
-def build_user_prompt(question: str, snippets: List[dict]) -> str:
-    # We still show filenames to the model for grounding, but we do NOT ask it to print them.
-    lines = []
-    for i, s in enumerate(snippets, start=1):
-        lines.append(f"FILE: {s['filename']}\nSNIPPET: {s['snippet']}\n")
-    context_block = "\n".join(lines) if lines else "(no context)"
-    return f"""Question: {question}
+# -----------------------------
+# Embeddings / Hybrid Retrieval
+# -----------------------------
+EMBED_MODEL = "text-embedding-3-small"  # 1536 dims (HNSW-friendly on pgvector 0.8.0)
+TOP_K_VEC = 8
+TOP_K_FTS = 8
+FINAL_K = 6
 
-Context snippets:
+def embed_query_text(client: OpenAI, text_in: str):
+    """Return a 1536-dim vector for the query using OpenAI embeddings."""
+    resp = client.embeddings.create(model=EMBED_MODEL, input=text_in)
+    return resp.data[0].embedding
+
+def ensure_knowledge_tsv_fresh(company_id: Optional[int] = None):
+    """
+    Populate public.knowledge.tsv for rows with NULL/empty tsv.
+    Safe/idempotent; call at startup and before queries.
+    """
+    sql = """
+    UPDATE public.knowledge
+    SET tsv = to_tsvector('english', coalesce(title,'') || ' ' || coalesce(content,''))
+    WHERE (tsv IS NULL OR tsv = ''::tsvector)
+    {cid_filter};
+    """.format(cid_filter="AND company_id = :cid" if company_id else "")
+    with db.engine.begin() as conn:
+        conn.execute(text(sql), ({"cid": company_id} if company_id else {}))
+
+def hybrid_retrieve_from_knowledge(company_id: int, query_text: str, client: OpenAI):
+    """
+    Returns list of dicts: {id, title, url, location, content, sim}
+    Combines vector ANN (embedding <=> :qvec) with FTS (ts_rank), merges, sorts.
+    """
+    # 1) embed query
+    qvec = embed_query_text(client, query_text)
+
+    # 2) vector hits
+    vec_sql = text("""
+        SELECT id, company_id, title, url, location, content,
+               1 - (embedding <=> :qvec) AS sim
+        FROM public.knowledge
+        WHERE company_id = :cid AND embedding IS NOT NULL
+        ORDER BY embedding <=> :qvec
+        LIMIT :k
+    """)
+
+    # 3) FTS hits
+    fts_sql = text("""
+        SELECT id, company_id, title, url, location, content,
+               ts_rank(tsv, plainto_tsquery('english', :q)) AS sim
+        FROM public.knowledge
+        WHERE company_id = :cid
+          AND tsv @@ plainto_tsquery('english', :q)
+        ORDER BY sim DESC
+        LIMIT :k
+    """)
+
+    with db.engine.begin() as conn:
+        vhits = conn.execute(vec_sql, {"cid": company_id, "qvec": qvec, "k": TOP_K_VEC}).mappings().all()
+        fhits = conn.execute(fts_sql, {"cid": company_id, "q": query_text, "k": TOP_K_FTS}).mappings().all()
+
+    # 4) merge by id; keep max sim
+    merged = {}
+    for r in list(vhits) + list(fhits):
+        rid = r["id"]
+        if rid not in merged or float(r["sim"]) > float(merged[rid]["sim"]):
+            merged[rid] = dict(r)
+
+    # 5) sort and top-K
+    candidates = sorted(merged.values(), key=lambda x: float(x["sim"]), reverse=True)
+    return candidates[:FINAL_K]
+
+def build_user_prompt(question: str, chunks: List[dict]) -> str:
+    """
+    chunks expects dictionaries with keys: title, url, location, content
+    """
+    blocks = []
+    for i, c in enumerate(chunks, start=1):
+        title = c.get("title") or "(untitled)"
+        url = c.get("url") or "(no url)"
+        quote = (c.get("content") or "").strip()
+        loc = c.get("location")
+        head = f"[{i}] {title} @ {url}" + (f" • {loc}" if loc else "")
+        blocks.append(f"{head}\n{quote}\n")
+    context_block = "\n".join(blocks) if blocks else "(no context)"
+
+    return f"""Question:
+{question}
+
+Use ONLY the context below. If the answer isn’t clearly supported, respond exactly:
+"I don’t know based on the information I have."
+
+Context:
 {context_block}
-
-Instructions:
-- Use only the context above.
-- Do not include filenames or citation markers in your answer. Return only the answer text.
 """
 
 # -----------------------------
@@ -233,9 +313,6 @@ def check_database():
 def ensure_schema_upgrades():
     """
     Bring an older DB up to date without Alembic. Safe to run repeatedly.
-    - add user.email + unique partial index (nullable)
-    - add user.must_reset_password (boolean default false)
-    - add company.owner_id + FK + index
     """
     ddl = """
     -- user.email
@@ -267,15 +344,16 @@ def ensure_schema_upgrades():
       END IF;
     END $$;
     CREATE INDEX IF NOT EXISTS ix_company_owner_id ON company(owner_id);
+
+    -- optional provenance on knowledge table
+    ALTER TABLE public.knowledge
+      ADD COLUMN IF NOT EXISTS filename varchar(255),
+      ADD COLUMN IF NOT EXISTS source_company_data_id int REFERENCES public.company_data(id);
     """
     with db.engine.begin() as conn:
         conn.execute(text(ddl))
 
 def create_default_admin():
-    """
-    Seed a default admin if the user table is empty.
-    Uses PBKDF2 to avoid scrypt mismatches across environments.
-    """
     try:
         if User.query.count() == 0:
             admin = User(
@@ -292,7 +370,6 @@ def create_default_admin():
     except Exception as e:
         db.session.rollback()
         app.logger.error(f"Failed creating default admin: {e}")
-        # don't raise — app can still run if admin exists already
 
 def get_openai_client() -> OpenAI:
     key = os.environ.get("OPENAI_API_KEY")
@@ -304,11 +381,7 @@ def _condense_ws(text_in: str) -> str:
     return re.sub(r"\s+", " ", text_in or "").strip()
 
 def extract_text_from_pdf(path: str, max_chars: int = 50_000) -> str:
-    """
-    Try PyPDF2 first; if too little text, fall back to pdfminer.six if installed.
-    """
     text_val = ""
-    # Attempt 1: PyPDF2
     try:
         reader = PdfReader(path)
         chunks = []
@@ -325,7 +398,6 @@ def extract_text_from_pdf(path: str, max_chars: int = 50_000) -> str:
     except Exception as e:
         app.logger.warning(f"PyPDF2 failed for {path}: {e}")
 
-    # Fallback: pdfminer if installed and PyPDF2 result small
     if len(text_val) < 50 and HAVE_PDFMINER:
         try:
             mined = pdfminer_extract_text(path) or ""  # type: ignore
@@ -396,7 +468,7 @@ def ingest_entry(entry: CompanyData):
 # Full-text bootstrap (safe to run)
 # -----------------------------
 def ensure_fulltext_indexes():
-    """Create tsvector column/index + triggers (idempotent)."""
+    """Create tsvector column/index + triggers (idempotent) on company_data; provenance on knowledge."""
     sql = """
     -- Add tsvector on company_data
     ALTER TABLE public.company_data
@@ -434,14 +506,12 @@ def ensure_fulltext_indexes():
         conn.execute(text(sql))
 
 # -----------------------------
-# Answer sanitizer (remove trailing inline file/source lines)
+# Answer sanitizer
 # -----------------------------
 def strip_inline_source_suffix(s: str) -> str:
     if not s:
         return s
     lines = s.rstrip().splitlines()
-    # Remove one or more trailing lines like:
-    # "[1] FILE: foo.pdf", "FILE: foo", "Source: foo"
     while lines and re.match(r'^(?:\[\d+\]\s*)?(?:file|source)\s*:\s*.+$', lines[-1].strip(), re.IGNORECASE):
         lines.pop()
     return "\n".join(lines).rstrip()
@@ -481,10 +551,6 @@ def require_company_owner(company_id: int):
 
 @app.context_processor
 def inject_user():
-    """
-    Make `current_user`, `is_admin`, and `must_reset_password`
-    available in ALL templates automatically.
-    """
     user_obj = current_user()
     return {
         "current_user": user_obj,
@@ -531,7 +597,6 @@ def signup():
             password = request.form.get("password") or ""
             confirm = request.form.get("confirm") or ""
 
-            # Basic validation
             if not company_name or not username or not password:
                 flash("Please fill in all required fields.", "error")
                 return render_template("signup.html", preset={
@@ -553,17 +618,15 @@ def signup():
                     "company_name": company_name, "username": username, "email": email or ""
                 })
 
-            # Create user + company (atomic)
             user = User(username=username, email=email)
             user.set_password(password)
             db.session.add(user)
-            db.session.flush()  # get user.id
+            db.session.flush()
 
             company = Company(name=company_name, owner_id=user.id)
             db.session.add(company)
             db.session.commit()
 
-            # Log in
             session["user_id"] = user.id
             flash("Account created! Welcome 👋", "success")
             return redirect(url_for("dashboard"))
@@ -577,7 +640,6 @@ def signup():
 
 @app.route("/change_password", methods=["GET", "POST"])
 def change_password():
-    # require login
     if "user_id" not in session:
         return redirect(url_for("login"))
 
@@ -587,8 +649,6 @@ def change_password():
         new = request.form.get("new_password", "")
         confirm = request.form.get("confirm_password", "")
 
-        # If must_reset_password is true, you can skip requiring current password;
-        # here we keep it simple and require it always for now.
         if not user.check_password(current):
             flash("Current password is incorrect.", "error")
             return render_template("change_password.html")
@@ -601,7 +661,6 @@ def change_password():
             flash("Passwords do not match.", "error")
             return render_template("change_password.html")
 
-        # save
         user.password_hash = generate_password_hash(new, method="pbkdf2:sha256", salt_length=16)
         if hasattr(user, "must_reset_password"):
             user.must_reset_password = False
@@ -611,7 +670,6 @@ def change_password():
         flash("Password updated successfully.", "success")
         return redirect(url_for("dashboard"))
 
-    # GET
     return render_template("change_password.html")
 
 @app.route("/logout")
@@ -675,7 +733,6 @@ def dashboard():
                     flash("Company created", "success")
                 return redirect(url_for("dashboard"))
 
-        # Only show companies owned by this user (admin sees all)
         if user.username == "admin":
             companies = Company.query.order_by(Company.created_at.desc()).all()
         else:
@@ -698,7 +755,6 @@ def delete_company(company_id: int):
             pass
         CompanyData.query.filter_by(company_id=company_id).delete()
         company = Company.query.get_or_404(company_id)
-        # Only owners or admin can delete
         user = current_user()
         if not ((company.owner_id == (user.id if user else None)) or (user and user.username == "admin")):
             flash("Forbidden", "error")
@@ -718,7 +774,6 @@ def manage(company_id: int):
     try:
         company = Company.query.get_or_404(company_id)
 
-        # Only owners or admin can manage
         user = current_user()
         if not ((company.owner_id == (user.id if user else None)) or (user and user.username == "admin")):
             flash("Forbidden", "error")
@@ -756,7 +811,6 @@ def reingest(company_id: int):
         return redirect(url_for("login"))
     try:
         company = Company.query.get_or_404(company_id)
-        # Only owners or admin can reingest
         user = current_user()
         if not ((company.owner_id == (user.id if user else None)) or (user and user.username == "admin")):
             flash("Forbidden", "error")
@@ -780,7 +834,6 @@ def delete_entry(entry_id: int):
         entry = CompanyData.query.get_or_404(entry_id)
         company_id = entry.company_id
 
-        # Only owners or admin can delete entries
         company = Company.query.get_or_404(company_id)
         user = current_user()
         if not ((company.owner_id == (user.id if user else None)) or (user and user.username == "admin")):
@@ -809,51 +862,70 @@ def agent(company_id: int):
         return redirect(url_for("login"))
     try:
         company = Company.query.get_or_404(company_id)
-
-        # Only owners or admin can view agent
         user = current_user()
         if not ((company.owner_id == (user.id if user else None)) or (user and user.username == "admin")):
             flash("Forbidden", "error")
             return redirect(url_for("dashboard"))
-
         return render_template("agent.html", company=company)
     except Exception as e:
         app.logger.error(f"Agent route error: {e}")
         flash("Failed to load agent page.", "error")
         return redirect(url_for("dashboard"))
 
+# -----------------------------
+# Agent API (HYBRID retrieval)
+# -----------------------------
 @app.post("/agent_api")
 def agent_api():
     """
     Answers a question for a given company_id by:
-    1) Running high-precision retrieval (Postgres FTS) to get filename+snippets
-    2) Calling the LLM with strict guardrails to prevent wrong citations
+    1) Hybrid retrieval from public.knowledge (pgvector + FTS) to get high-recall chunks
+    2) Calling the LLM with strict guardrails
+    3) Returning 'sources' with exact quotes + URLs for the UI
     """
     if "user_id" not in session:
         return jsonify({"answer": None, "sources": [], "error": "unauthorized"}), 401
     try:
-        # Accept both JSON and form
         data = request.get_json(silent=True) or {}
         if not data and request.form:
             data = request.form.to_dict()
 
         user_message = (data.get("message") or "").strip()
         company_id = int(request.args.get("company_id", "0") or 0)
+        show_sources = bool(data.get("show_sources", True))
 
         if not user_message:
             payload = {"answer": None, "sources": [], "error": "no_input"}
-            # Optional: log what came in to catch empty bodies quickly
             app.logger.info("agent_api: empty user_message; sending %s", payload)
             return jsonify(payload), 400
 
         client = get_openai_client()
 
-        # Build retrieval context (filenames + snippets)
-        ensure_fulltext_indexes()
-        snippets = get_context_snippets(user_message, company_id) if company_id else []
+        # Keep knowledge.tsv fresh for this company (safe + idempotent)
+        ensure_knowledge_tsv_fresh(company_id if company_id else None)
 
-        # Guardrails + prompt
-        user_prompt = build_user_prompt(user_message, snippets)
+        # --- HYBRID RETRIEVAL ---
+        hits = hybrid_retrieve_from_knowledge(company_id, user_message, client) if company_id else []
+
+        # Build LLM context + UI sources
+        llm_chunks: List[dict] = []
+        sources_payload: List[dict] = []
+        for h in hits:
+            llm_chunks.append({
+                "title": h.get("title"),
+                "url": h.get("url"),
+                "location": h.get("location"),
+                "content": h.get("content"),
+            })
+            sources_payload.append({
+                "title": h.get("title") or "(untitled)",
+                "filename": None,
+                "url": h.get("url"),
+                "quote": (h.get("content") or ""),
+                "location": h.get("location"),
+            })
+
+        user_prompt = build_user_prompt(user_message, llm_chunks)
 
         resp = client.chat.completions.create(
             model="gpt-4o-mini",
@@ -865,20 +937,27 @@ def agent_api():
             temperature=0.2,
         )
 
-        text_out = (resp.choices[0].message.content or "").strip()
-        text_out = strip_inline_source_suffix(text_out)
+        text_out = strip_inline_source_suffix((resp.choices[0].message.content or "").strip())
 
-        payload = {"answer": text_out, "sources": snippets, "error": None}
-        # Log a short preview so you can confirm schema in logs
-        app.logger.info("agent_api OK (len=%d): %s",
-                        len((text_out or "")), str({**payload, "answer": (text_out[:120] + ("…" if len(text_out) > 120 else ""))}))
+        payload = {
+            "answer": text_out,
+            "sources": sources_payload if show_sources else [],
+            "error": None
+        }
+        app.logger.info(
+            "agent_api OK (len=%d, hits=%d): %s",
+            len(text_out or ""), len(hits or []),
+            str({**payload, "answer": (text_out[:120] + ('…' if len(text_out) > 120 else ''))})
+        )
         return jsonify(payload), 200
 
     except Exception as e:
         app.logger.exception("Agent API error")
         return jsonify({"answer": None, "sources": [], "error": str(e)}), 500
 
-
+# -----------------------------
+# Health + single-ingest route
+# -----------------------------
 @app.route("/health")
 def health():
     return jsonify({"status": "ok"}), 200
@@ -890,7 +969,6 @@ def ingest_single(entry_id: int):
     try:
         entry = CompanyData.query.get_or_404(entry_id)
 
-        # Only owners or admin can reingest single entry
         company = Company.query.get_or_404(entry.company_id)
         user = current_user()
         if not ((company.owner_id == (user.id if user else None)) or (user and user.username == "admin")):
@@ -913,7 +991,8 @@ with app.app_context():
     check_database()
     db.create_all()
     ensure_schema_upgrades()   # ensure columns/indexes/FK exist
-    ensure_fulltext_indexes()  # FTS infra
+    ensure_fulltext_indexes()  # company_data FTS infra + knowledge provenance
+    ensure_knowledge_tsv_fresh(None)  # keep knowledge.tsv populated
     create_default_admin()     # safe if already present
 
 if __name__ == "__main__":
