@@ -78,6 +78,11 @@
                   <div class="flex items-center gap-2">
                     <a href="{{ url_for('manage', company_id=c.id) }}"
                        class="px-3 py-1.5 rounded bg-gray-900 text-white hover:bg-gray-800 text-sm">Manage</a>
+                    <button type="button"
+                            onclick="copyAgentUrl('{{ c.id }}', this)"
+                            class="px-3 py-1.5 rounded bg-gray-200 text-gray-800 hover:bg-gray-300 text-sm">
+                      Copy URL
+                    </button>
                     <a href="{{ url_for('agent', company_id=c.id) }}"
                        class="px-3 py-1.5 rounded bg-gray-200 text-gray-800 hover:bg-gray-300 text-sm">Agent</a>
                     <a href="{{ url_for('delete_company', company_id=c.id) }}"
@@ -96,5 +101,18 @@
       </div>
     </div>
   </main>
+
+  <script>
+    function copyAgentUrl(companyId, btn) {
+      const url = `${window.location.origin}/agent/${companyId}`;
+      navigator.clipboard.writeText(url).then(() => {
+        const old = btn.textContent;
+        btn.textContent = "Copied!";
+        setTimeout(() => { btn.textContent = old; }, 1500);
+      }).catch(err => {
+        alert("Failed to copy URL: " + err);
+      });
+    }
+  </script>
 </body>
 </html>

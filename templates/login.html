@@ -37,10 +37,13 @@
         </div>
         <div>
           <label class="block text-sm text-gray-600 mb-1">Password</label>
-          <input class="w-full border rounded px-3 py-2" type="password" name="password" autocomplete="current-password" required/>
+          <div class="relative">
+            <input id="password" class="w-full border rounded px-3 py-2 pr-16" type="password" name="password" autocomplete="current-password" required/>
+            <button type="button" onclick="togglePassword()" class="absolute right-2 top-1/2 -translate-y-1/2 text-xs text-gray-500 hover:text-gray-800">
+              Show
+            </button>
+          </div>
         </div>
-
-        {# If you add Flask-WTF later: {{ form.csrf_token }} #}
 
         <button class="w-full bg-gray-900 text-white px-4 py-2 rounded hover:bg-gray-800">Sign in</button>
       </form>
@@ -53,5 +56,20 @@
       </div>
     </div>
   </div>
+
+  <script>
+    function togglePassword() {
+      const input = document.getElementById("password");
+      const btn = event.currentTarget;
+      if (input.type === "password") {
+        input.type = "text";
+        btn.textContent = "Hide";
+      } else {
+        input.type = "password";
+        btn.textContent = "Show";
+      }
+    }
+  </script>
 </body>
 </html>
+

@@ -11,7 +11,7 @@ from flask import (
 from flask_sqlalchemy import SQLAlchemy
 from werkzeug.security import generate_password_hash, check_password_hash
 from werkzeug.utils import secure_filename
-from sqlalchemy import text, asc, or_
+from sqlalchemy import text, asc, or_, bindparam
 from dotenv import load_dotenv
 
 import requests
@@ -192,7 +192,7 @@ def get_context_snippets(question: str, company_id: int):
 # -----------------------------
 # Guardrails
 # -----------------------------
-SYSTEM_GUARDRAILS = """You are a call-center assistant constrained to the provided context.
+SYSTEM_GUARDRAILS = """You are a call-center agent assistant constrained to the provided context.
 Rules:
 - Answer ONLY using the provided context blocks.
 - If information is insufficient, reply exactly: "I don’t know based on the information I have."
@@ -203,10 +203,11 @@ Rules:
 # -----------------------------
 # Embeddings / Hybrid Retrieval
 # -----------------------------
-EMBED_MODEL = "text-embedding-3-small"  # 1536 dims (HNSW-friendly on pgvector 0.8.0)
+EMBED_MODEL = "text-embedding-3-small"  # 1536 dims (matches DB vector(1536))
 TOP_K_VEC = 8
 TOP_K_FTS = 8
 FINAL_K = 6
+EMBED_DIM = 1536  # keep in one place
 
 def embed_query_text(client: OpenAI, text_in: str):
     """Return a 1536-dim vector for the query using OpenAI embeddings."""
@@ -236,14 +237,28 @@ def hybrid_retrieve_from_knowledge(company_id: int, query_text: str, client: Ope
     qvec = embed_query_text(client, query_text)
 
     # 2) vector hits
-    vec_sql = text("""
-        SELECT id, company_id, title, url, location, content,
-               1 - (embedding <=> :qvec) AS sim
-        FROM public.knowledge
-        WHERE company_id = :cid AND embedding IS NOT NULL
-        ORDER BY embedding <=> :qvec
-        LIMIT :k
-    """)
+    if Vector is not None:
+        # Clean, typed binding: ensures :qvec is a true pgvector vector(1536)
+        vec_sql = text("""
+            SELECT id, company_id, title, url, location, content,
+                   1 - (embedding <=> :qvec) AS sim
+            FROM public.knowledge
+            WHERE company_id = :cid AND embedding IS NOT NULL
+            ORDER BY embedding <=> :qvec
+            LIMIT :k
+        """).bindparams(bindparam("qvec", type_=Vector(EMBED_DIM)))
+        vector_params = {"cid": company_id, "qvec": qvec, "k": TOP_K_VEC}
+    else:
+        # Fallback: explicit cast to vector if pgvector.sqlalchemy is unavailable
+        vec_sql = text("""
+            SELECT id, company_id, title, url, location, content,
+                   1 - (embedding <=> :qvec::vector) AS sim
+            FROM public.knowledge
+            WHERE company_id = :cid AND embedding IS NOT NULL
+            ORDER BY embedding <=> :qvec::vector
+            LIMIT :k
+        """)
+        vector_params = {"cid": company_id, "qvec": qvec, "k": TOP_K_VEC}
 
     # 3) FTS hits
     fts_sql = text("""
@@ -257,7 +272,7 @@ def hybrid_retrieve_from_knowledge(company_id: int, query_text: str, client: Ope
     """)
 
     with db.engine.begin() as conn:
-        vhits = conn.execute(vec_sql, {"cid": company_id, "qvec": qvec, "k": TOP_K_VEC}).mappings().all()
+        vhits = conn.execute(vec_sql, vector_params).mappings().all()
         fhits = conn.execute(fts_sql, {"cid": company_id, "q": query_text, "k": TOP_K_FTS}).mappings().all()
 
     # 4) merge by id; keep max sim
