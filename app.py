@@ -1,12 +1,13 @@
 import os
 import re
 import logging
+import datetime as dt
 from datetime import datetime
 from typing import List, Optional
 
 from flask import (
     Flask, render_template, request, redirect, url_for,
-    session, jsonify, flash
+    session, jsonify, flash, make_response
 )
 from flask_sqlalchemy import SQLAlchemy
 from werkzeug.security import generate_password_hash, check_password_hash
@@ -17,6 +18,7 @@ from dotenv import load_dotenv
 import requests
 from bs4 import BeautifulSoup
 from PyPDF2 import PdfReader
+import jwt  # <-- PyJWT
 
 # OpenAI SDK v1.x
 from openai import OpenAI
@@ -86,6 +88,54 @@ def create_app():
 
 app = create_app()
 db = SQLAlchemy(app)
+
+# -----------------------------
+# JWT (Embed Mode)
+# -----------------------------
+JWT_SECRET = os.environ.get("EMBED_JWT_SECRET", "change-me")
+JWT_ALGO = "HS256"
+
+def make_embed_token(company_id: int, campaign_id: Optional[int] = None,
+                     agent_label: str = "callshaper", ttl_hours: int = 8) -> str:
+    now = dt.datetime.utcnow()
+    payload = {
+        "sub": "agent-embed",
+        "company_id": company_id,
+        "campaign_id": campaign_id,
+        "agent_label": agent_label,
+        "scopes": ["agent_view", "agent_actions"],
+        "iat": now,
+        "exp": now + dt.timedelta(hours=ttl_hours),
+    }
+    return jwt.encode(payload, JWT_SECRET, algorithm=JWT_ALGO)
+
+def verify_token_from_request():
+    token = request.args.get("token")
+    if not token:
+        auth = request.headers.get("Authorization", "")
+        if auth.startswith("Bearer "):
+            token = auth.split(" ", 1)[1].strip()
+    if not token:
+        raise jwt.InvalidTokenError("Missing token")
+    return jwt.decode(token, JWT_SECRET, algorithms=[JWT_ALGO])
+
+def try_get_embed_claims_silent():
+    try:
+        return verify_token_from_request()
+    except Exception:
+        return None
+
+def embed_required(f):
+    from functools import wraps
+    @wraps(f)
+    def wrapper(*args, **kwargs):
+        try:
+            claims = verify_token_from_request()
+        except Exception:
+            return jsonify({"error": "unauthorized"}), 401
+        request.embed_claims = claims
+        return f(*args, **kwargs)
+    return wrapper
 
 # -----------------------------
 # Database Models
@@ -727,6 +777,26 @@ def admin_reset_password(user_id: int):
     flash(f"Password for '{user.username}' reset to Temp1234.", "success")
     return redirect(url_for("admin_users"))
 
+@app.route("/admin/embed_url/<int:company_id>", methods=["GET"])
+def admin_embed_url(company_id: int):
+    """Helper to mint a tokenized iframe URL. Admins or the company owner only."""
+    if "user_id" not in session:
+        return redirect(url_for("login"))
+
+    company = Company.query.get_or_404(company_id)
+    user = current_user()
+    if not ((company.owner_id == (user.id if user else None)) or (user and user.username == "admin")):
+        return jsonify({"error": "forbidden"}), 403
+
+    campaign_id = request.args.get("campaign_id")
+    ttl_hours = int(request.args.get("ttl_hours", "8"))
+    token = make_embed_token(company_id=company_id,
+                             campaign_id=int(campaign_id) if campaign_id else None,
+                             ttl_hours=ttl_hours)
+    base = request.url_root.rstrip("/")
+    url = f"{base}/agent/embed?token={token}"
+    return jsonify({"company_id": company_id, "embed_url": url, "ttl_hours": ttl_hours})
+
 # -----------------------------
 # Routes: App (dashboard/companies/agent)
 # -----------------------------
@@ -888,7 +958,33 @@ def agent(company_id: int):
         return redirect(url_for("dashboard"))
 
 # -----------------------------
+# NEW: Cookie-free embed route for CallShaper iframe
+# -----------------------------
+@app.route("/agent/embed", methods=["GET"])
+@embed_required
+def agent_embed():
+    claims = getattr(request, "embed_claims", {})
+    company_id = claims.get("company_id")
+    if not company_id or not Company.query.get(company_id):
+        return "Unknown company", 404
+
+    # Render a minimal agent template for iframe usage (no login bars, etc.)
+    resp = make_response(render_template(
+        "agent_embed.html",
+        company_id=company_id,
+        campaign_id=claims.get("campaign_id"),
+        agent_label=claims.get("agent_label", "agent")
+    ))
+    # Allow embedding inside CallShaper
+    resp.headers["Content-Security-Policy"] = (
+        "frame-ancestors 'self' https://manage.callshaper.com https://*.callshaper.com;"
+    )
+    # Do not set X-Frame-Options here (CSP is the modern control)
+    return resp
+
+# -----------------------------
 # Agent API (HYBRID retrieval)
+#   - Works with normal session OR with a valid embed token
 # -----------------------------
 @app.post("/agent_api")
 def agent_api():
@@ -897,16 +993,25 @@ def agent_api():
     1) Hybrid retrieval from public.knowledge (pgvector + FTS) to get high-recall chunks
     2) Calling the LLM with strict guardrails
     3) Returning 'sources' with exact quotes + URLs for the UI
+
+    Auth:
+      - Session cookie (normal app), OR
+      - Bearer/Query token issued by make_embed_token (embed mode)
     """
-    if "user_id" not in session:
+    claims = try_get_embed_claims_silent()
+    has_session = "user_id" in session
+
+    if not has_session and not claims:
         return jsonify({"answer": None, "sources": [], "error": "unauthorized"}), 401
+
     try:
         data = request.get_json(silent=True) or {}
         if not data and request.form:
             data = request.form.to_dict()
 
         user_message = (data.get("message") or "").strip()
-        company_id = int(request.args.get("company_id", "0") or 0)
+        # If token claims exist, force company_id from token. Else accept query param.
+        company_id = int(claims["company_id"]) if claims else int(request.args.get("company_id", "0") or 0)
         show_sources = bool(data.get("show_sources", True))
 
         if not user_message:
@@ -969,6 +1074,20 @@ def agent_api():
     except Exception as e:
         app.logger.exception("Agent API error")
         return jsonify({"answer": None, "sources": [], "error": str(e)}), 500
+
+# -----------------------------
+# NEW: Minimal data endpoint for embed page boot
+# -----------------------------
+@app.get("/api/embed/agent_view")
+@embed_required
+def agent_view_data():
+    claims = getattr(request, "embed_claims", {})
+    return jsonify({
+        "ok": True,
+        "company_id": claims.get("company_id"),
+        "campaign_id": claims.get("campaign_id"),
+        "agent_label": claims.get("agent_label", "agent")
+    })
 
 # -----------------------------
 # Health + single-ingest route
