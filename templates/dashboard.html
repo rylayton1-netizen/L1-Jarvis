@@ -96,13 +96,10 @@
                   <!-- Second row: iFrame tokenized URL tools -->
                   <div class="mt-3 bg-gray-50 border border-gray-200 rounded-lg p-3">
                     <div class="flex items-center flex-wrap gap-2">
-                      <label for="camp-{{ c.id }}" class="text-xs text-gray-600">Campaign ID (optional)</label>
-                      <input id="camp-{{ c.id }}" type="text" placeholder="e.g., 456"
-                             class="border rounded px-2 py-1 w-36 text-sm"/>
-
-                      <label for="ttl-{{ c.id }}" class="text-xs text-gray-600 ml-2">TTL (hours)</label>
-                      <input id="ttl-{{ c.id }}" type="number" min="1" value="8" title="Token Time To Live (hours)"
-                             class="border rounded px-2 py-1 w-20 text-sm"/>
+                      <label for="ttl-{{ c.id }}" class="text-xs text-gray-600">TTL (hours)</label>
+                      <input id="ttl-{{ c.id }}" type="number" min="0" step="1" value="8"
+                             title="Token Time To Live (hours). 0 = no expiry"
+                             class="border rounded px-2 py-1 w-24 text-sm"/>
 
                       <button type="button"
                               class="px-3 py-1.5 rounded bg-blue-600 text-white hover:bg-blue-700 text-sm"
@@ -120,7 +117,7 @@
                       <span id="copyerr-{{ c.id }}" class="text-red-600 text-sm hidden"></span>
                     </div>
                     <p class="mt-2 text-xs text-gray-500">
-                      This generates a short-lived, login-less URL for use inside CallShaper. Paste it as the <code>src</code> of your script’s iframe.
+                      Generates a login-less URL for embedding inside CallShaper. Set TTL to <strong>0</strong> for no expiry.
                     </p>
                   </div>
                 </div>
@@ -135,65 +132,64 @@
   </main>
 
   <script>
-    async function getEmbedUrl(companyId) {
-      const camp = document.getElementById(`camp-${companyId}`);
-      const ttl  = document.getElementById(`ttl-${companyId}`);
-      const params = new URLSearchParams();
-      if (camp && camp.value.trim()) params.set('campaign_id', camp.value.trim());
-      if (ttl && ttl.value) params.set('ttl_hours', ttl.value);
-
-      const resp = await fetch(`/admin/embed_url/${companyId}?` + params.toString(), {
-        credentials: 'same-origin'
-      });
-
-      if (!resp.ok) {
-        let msg = `HTTP ${resp.status}`;
+    async function mintEmbed(companyId, ttlHours) {
+      const url = `/admin/embed_url/${companyId}?ttl_hours=${encodeURIComponent(ttlHours)}`;
+      const res = await fetch(url, { credentials: 'include' });
+      if (!res.ok) {
+        let msg = `HTTP ${res.status}`;
         try {
-          const j = await resp.json();
+          const j = await res.json();
           if (j && j.error) msg = j.error;
-        } catch(_) {}
+        } catch (_) {}
         throw new Error(msg);
       }
-
-      const data = await resp.json();
+      const data = await res.json(); // { company_id, embed_url, ttl_hours }
       if (!data || !data.embed_url) throw new Error('No embed_url in response');
       return data.embed_url;
     }
 
     async function copyEmbedUrl(companyId, btn) {
+      const ttlInput = document.getElementById(`ttl-${companyId}`);
+      const ttl = parseInt(ttlInput && ttlInput.value ? ttlInput.value : '8', 10);
       const ok = document.getElementById(`copied-${companyId}`);
       const err = document.getElementById(`copyerr-${companyId}`);
       const old = btn.textContent;
       err && (err.textContent = '', err.classList.add('hidden'));
       try {
+        btn.disabled = true;
         btn.textContent = 'Generating...';
-        const url = await getEmbedUrl(companyId);
+        const url = await mintEmbed(companyId, isNaN(ttl) ? 8 : ttl);
         await navigator.clipboard.writeText(url);
         btn.textContent = 'Copied!';
         ok && ok.classList.remove('hidden');
-        setTimeout(() => { btn.textContent = old; ok && ok.classList.add('hidden'); }, 1500);
+        setTimeout(() => { btn.textContent = old; ok && ok.classList.add('hidden'); btn.disabled = false; }, 1500);
       } catch (e) {
         btn.textContent = old;
+        btn.disabled = false;
         if (err) { err.textContent = e.message || 'Copy failed'; err.classList.remove('hidden'); }
         alert('Could not copy iFrame URL: ' + (e.message || e));
       }
     }
 
     async function copyIframeHtml(companyId, btn) {
+      const ttlInput = document.getElementById(`ttl-${companyId}`);
+      const ttl = parseInt(ttlInput && ttlInput.value ? ttlInput.value : '8', 10);
       const ok = document.getElementById(`copied-${companyId}`);
       const err = document.getElementById(`copyerr-${companyId}`);
       const old = btn.textContent;
       err && (err.textContent = '', err.classList.add('hidden'));
       try {
+        btn.disabled = true;
         btn.textContent = 'Generating...';
-        const url = await getEmbedUrl(companyId);
-        const html = `<iframe src="${url}" style="width:100%;height:700px;border:0;" allow="clipboard-read; clipboard-write; microphone; autoplay" referrerpolicy="no-referrer"></iframe>`;
+        const url = await mintEmbed(companyId, isNaN(ttl) ? 8 : ttl);
+        const html = `<iframe src="${url}" style="width:100%;height:700px;border:0;" allow="clipboard-read; clipboard-write" referrerpolicy="no-referrer"></iframe>`;
         await navigator.clipboard.writeText(html);
         btn.textContent = 'Copied!';
         ok && ok.classList.remove('hidden');
-        setTimeout(() => { btn.textContent = old; ok && ok.classList.add('hidden'); }, 1500);
+        setTimeout(() => { btn.textContent = old; ok && ok.classList.add('hidden'); btn.disabled = false; }, 1500);
       } catch (e) {
         btn.textContent = old;
+        btn.disabled = false;
         if (err) { err.textContent = e.message || 'Copy failed'; err.classList.remove('hidden'); }
         alert('Could not copy iframe HTML: ' + (e.message || e));
       }

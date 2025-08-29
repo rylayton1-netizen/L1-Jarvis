@@ -18,7 +18,7 @@ from dotenv import load_dotenv
 import requests
 from bs4 import BeautifulSoup
 from PyPDF2 import PdfReader
-import jwt  # <-- PyJWT
+import jwt  # PyJWT
 
 # OpenAI SDK v1.x
 from openai import OpenAI
@@ -57,7 +57,7 @@ def create_app():
     # Database URL
     raw_url = os.environ.get("DATABASE_URL", "sqlite:///l1_jarvis.db")
 
-    # Normalize Postgres URIs for SQLAlchemy + psycopg2 and require SSL on Render/hosted
+    # Normalize Postgres URIs for SQLAlchemy + psycopg2 and require SSL on hosted
     db_url = raw_url
     if db_url.startswith("postgres://"):
         db_url = db_url.replace("postgres://", "postgresql://", 1)
@@ -95,8 +95,15 @@ db = SQLAlchemy(app)
 JWT_SECRET = os.environ.get("EMBED_JWT_SECRET", "change-me")
 JWT_ALGO = "HS256"
 
-def make_embed_token(company_id: int, campaign_id: Optional[int] = None,
-                     agent_label: str = "callshaper", ttl_hours: int = 8) -> str:
+def make_embed_token(
+    company_id: int,
+    campaign_id: Optional[int] = None,
+    agent_label: str = "callshaper",
+    ttl_hours: Optional[int] = 8
+) -> str:
+    """
+    Mint a JWT for iframe embed. If ttl_hours == 0, token has NO 'exp' (non-expiring).
+    """
     now = dt.datetime.utcnow()
     payload = {
         "sub": "agent-embed",
@@ -105,8 +112,13 @@ def make_embed_token(company_id: int, campaign_id: Optional[int] = None,
         "agent_label": agent_label,
         "scopes": ["agent_view", "agent_actions"],
         "iat": now,
-        "exp": now + dt.timedelta(hours=ttl_hours),
     }
+    try:
+        th = int(ttl_hours) if ttl_hours is not None else 8
+    except (TypeError, ValueError):
+        th = 8
+    if th > 0:
+        payload["exp"] = now + dt.timedelta(hours=th)
     return jwt.encode(payload, JWT_SECRET, algorithm=JWT_ALGO)
 
 def verify_token_from_request():
@@ -779,7 +791,12 @@ def admin_reset_password(user_id: int):
 
 @app.route("/admin/embed_url/<int:company_id>", methods=["GET"])
 def admin_embed_url(company_id: int):
-    """Helper to mint a tokenized iframe URL. Admins or the company owner only."""
+    """
+    Helper to mint a tokenized iframe URL. Admins or the company owner only.
+    TTL behavior:
+      - ttl_hours > 0  -> token expires after that many hours
+      - ttl_hours == 0 -> token has NO 'exp' (non-expiring)
+    """
     if "user_id" not in session:
         return redirect(url_for("login"))
 
@@ -788,11 +805,18 @@ def admin_embed_url(company_id: int):
     if not ((company.owner_id == (user.id if user else None)) or (user and user.username == "admin")):
         return jsonify({"error": "forbidden"}), 403
 
-    campaign_id = request.args.get("campaign_id")
-    ttl_hours = int(request.args.get("ttl_hours", "8"))
-    token = make_embed_token(company_id=company_id,
-                             campaign_id=int(campaign_id) if campaign_id else None,
-                             ttl_hours=ttl_hours)
+    campaign_id = request.args.get("campaign_id")  # optional; dashboard no longer sends it
+    ttl_param = request.args.get("ttl_hours", "8")
+    try:
+        ttl_hours = int(ttl_param)
+    except (TypeError, ValueError):
+        ttl_hours = 8
+
+    token = make_embed_token(
+        company_id=company_id,
+        campaign_id=int(campaign_id) if campaign_id else None,
+        ttl_hours=ttl_hours
+    )
     base = request.url_root.rstrip("/")
     url = f"{base}/agent/embed?token={token}"
     return jsonify({"company_id": company_id, "embed_url": url, "ttl_hours": ttl_hours})
@@ -958,28 +982,23 @@ def agent(company_id: int):
         return redirect(url_for("dashboard"))
 
 # -----------------------------
-# NEW: Cookie-free embed route for CallShaper iframe
+# Cookie-free embed route for CallShaper iframe
 # -----------------------------
 @app.route("/agent/embed", methods=["GET"])
 @embed_required
 def agent_embed():
     claims = getattr(request, "embed_claims", {})
     company_id = claims.get("company_id")
-    if not company_id or not Company.query.get(company_id):
-        return "Unknown company", 404
+    company = Company.query.get_or_404(company_id)
 
-    # Render a minimal agent template for iframe usage (no login bars, etc.)
     resp = make_response(render_template(
-        "agent_embed.html",
-        company_id=company_id,
-        campaign_id=claims.get("campaign_id"),
-        agent_label=claims.get("agent_label", "agent")
+        "agent.html",            # reuse the same template for visual consistency
+        company=company,
+        embed_mode=True          # optional flag if you want it in your template
     ))
-    # Allow embedding inside CallShaper
     resp.headers["Content-Security-Policy"] = (
         "frame-ancestors 'self' https://manage.callshaper.com https://*.callshaper.com;"
     )
-    # Do not set X-Frame-Options here (CSP is the modern control)
     return resp
 
 # -----------------------------
@@ -1076,7 +1095,7 @@ def agent_api():
         return jsonify({"answer": None, "sources": [], "error": str(e)}), 500
 
 # -----------------------------
-# NEW: Minimal data endpoint for embed page boot
+# Minimal data endpoint for embed page boot
 # -----------------------------
 @app.get("/api/embed/agent_view")
 @embed_required

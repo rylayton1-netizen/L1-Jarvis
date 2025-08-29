@@ -58,6 +58,18 @@
   </main>
 
   <script>
+    // -------- Dual-mode plumbing (normal vs embed) --------
+    const qs = new URLSearchParams(location.search);
+    const TOKEN = qs.get('token');                 // present in embed mode
+    const isEmbed = !!TOKEN;
+    const API_URL = isEmbed
+      ? '/agent_api'                                // token carries company_id in backend
+      : `{{ url_for("agent_api") }}?company_id={{ company.id }}`;
+    const BASE_HEADERS = isEmbed
+      ? { 'Content-Type': 'application/json', 'Authorization': `Bearer ${TOKEN}` }
+      : { 'Content-Type': 'application/json' };
+
+    // -------- Existing UI logic --------
     const chatBox = document.getElementById('chat-box');
     const inputEl = document.getElementById('user-input');
     const sendBtn = document.getElementById('send-btn');
@@ -185,10 +197,9 @@
       inputEl.value=''; autoResize(); inputEl.disabled=true; sendBtn.disabled=true; isSending=true;
       const thinkingBubble=appendThinking();
       try{
-        const res=await fetch(`{{ url_for("agent_api") }}?company_id={{ company.id }}`,{
+        const res=await fetch(API_URL,{
           method:'POST',
-          headers:{'Content-Type':'application/json'},
-          // optionally pass the user's preference to your backend if you want server-side control
+          headers: BASE_HEADERS,
           body:JSON.stringify({message, show_sources: !!showSources})
         });
 
